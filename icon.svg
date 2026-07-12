@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#10151f"/>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd869"/><stop offset="1" stop-color="#f2a017"/></linearGradient></defs>
+  <polygon points="256,64 424,163 424,349 256,448 88,349 88,163" fill="url(#g)" stroke="#d3870d" stroke-width="14" stroke-linejoin="round"/>
+  <text x="256" y="316" text-anchor="middle" font-size="164" font-weight="800" fill="#5c3800" font-family="-apple-system,'Helvetica Neue',Arial,sans-serif">R$</text>
+</svg>

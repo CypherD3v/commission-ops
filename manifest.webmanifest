@@ -1,0 +1,16 @@
+{
+  "name": "Commission Ops",
+  "short_name": "Commission Ops",
+  "description": "Single-file studio hub for creative commissions — pipeline, clients, retainers, finances, contracts, invoices. All data stays in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4263eb",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "file_handlers": [
+    { "action": "./", "accept": { "application/json": [".json"] } }
+  ]
+}

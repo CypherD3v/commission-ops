@@ -4,6 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Commission Operations — Studio Hub</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#4263eb">
+<link rel="apple-touch-icon" href="icon.svg">
 <style>
   :root{--bg:#ffffff;--panel:#ffffff;--panel-2:#f4f5f7;--line:#e2e4e8;--txt:#141414;--muted:#68707c;--accent:#4263eb;--accent-2:#0ca678;--warn:#d97706;--bad:#e03131;--good:#2f9e44;--chip:#eef0f3;--inbox:#868e96;--quoted:#f08c00;--progress:#4263eb;--review:#9c36b5;--delivered:#0ca678;--paid:#2f9e44;--lost:#adb5bd;}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -358,8 +361,9 @@ const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
 const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.0.0',APP_BUILD='2026-07-04';
+const APP_VERSION='2.1.0',APP_BUILD='2026-07-11';
 const CHANGELOG=[
+ ['2.1.0','Installable PWA: offline app shell, new-version toast, backup-file handler (open a .json straight into the app), attention-count icon badge · linked USB backup file (load on open, write on save) · GitHub Pages deployment'],
  ['2.0.0','IndexedDB-primary storage · retainers · invoice register with chase messages · pipeline archive · 30-day trash · client timelines · quote PDFs · Robux/DevEx tracker · evidence-based rate card with target-rate floors · Discord & additional-clients support · data health check'],
  ['1.5','Light theme · Lost stage & win rate · quote validity · hours logged & £/hr · VAT threshold bar · global search · next-action nudges · backup hardening · encryption save-race fix · contract terms aligned & typeset'],
  ['1.0','Original single-file dashboard: pipeline, clients, finances, agreements, documents, messages']];
@@ -1761,7 +1765,27 @@ function filterGlobal(){const inp=document.getElementById('gSearch');const list=
   list.innerHTML=out.slice(0,12).map(o=>`<div class="combo-item" onmousedown="hideGlobal();${o.on}">${esc(o.t)} <span class="mini">${esc(o.s)}</span></div>`).join('')||'<div class="combo-item" style="cursor:default"><span class="mini">No matches.</span></div>';list.style.display='block';}
 function hideGlobal(){const l=document.getElementById('gList');if(l)l.style.display='none';}
 function setupChartTip(){document.addEventListener('mouseover',e=>{const c=e.target&&e.target.closest?e.target.closest('.dot,.tok'):null;if(!c)return;if(c.classList.contains('tok'))showTokTip(c);else showTip(c);});document.addEventListener('mouseout',e=>{const c=e.target&&e.target.closest?e.target.closest('.dot,.tok'):null;if(c)hideTip();});}
-function startApp(){ensureHtmlTemplates();normalizeCommissions();ensureMessages();purgeTrash();spawnDueRetainers();renderTabsNav();renderTab();updateFxBadge();fetchFX();initLinkedFile();const vs=document.getElementById('verStamp');if(vs)vs.textContent='Commission Ops v'+APP_VERSION+' ('+APP_BUILD+') · ';}
+function startApp(){ensureHtmlTemplates();normalizeCommissions();ensureMessages();purgeTrash();spawnDueRetainers();renderTabsNav();renderTab();updateFxBadge();fetchFX();initLinkedFile();initPWA();const vs=document.getElementById('verStamp');if(vs)vs.textContent='Commission Ops v'+APP_VERSION+' ('+APP_BUILD+') · ';}
+/* ---- PWA: service worker, update toast, icon badge, backup-file handler ---- */
+function initPWA(){try{
+  if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){
+    navigator.serviceWorker.register('sw.js').then(reg=>{
+      reg.addEventListener('updatefound',()=>{const nw=reg.installing;if(!nw)return;nw.addEventListener('statechange',()=>{if(nw.state==='installed'&&navigator.serviceWorker.controller)showPwaToast();});});
+    }).catch(()=>{});
+  }
+  if(typeof window!=='undefined'&&'launchQueue' in window&&window.launchQueue&&window.launchQueue.setConsumer){
+    window.launchQueue.setConsumer(async p=>{try{
+      if(!p.files||!p.files.length)return;const h=p.files[0];
+      const env=JSON.parse(await (await h.getFile()).text());
+      if(!confirm('Open backup “'+(h.name||'backup.json')+'”?\n\nOK = load it and keep it LINKED (every save writes back to it).'))return;
+      linkedHandle=h;linkedName=h.name||'backup.json';
+      const okd=await loadStateFromEnvelope(env);
+      if(okd){linkedState='ok';idbPut(HKEY,h).catch(()=>{});renderTab();}else{linkedHandle=null;linkedName='';}
+    }catch(e){alert('That file isn’t a valid Commission Ops backup.');}});
+  }
+}catch(e){}}
+function showPwaToast(){if(document.getElementById('pwaToast'))return;const el=document.createElement('div');el.id='pwaToast';el.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--txt);color:var(--bg);padding:11px 16px;border-radius:10px;z-index:70;box-shadow:0 8px 24px rgba(20,25,35,.3);font-size:13.5px';el.innerHTML='A new version of Commission Ops is ready. <button style="margin-left:8px;border:none;border-radius:7px;padding:6px 12px;cursor:pointer;background:var(--accent);color:#fff;font-weight:600" onclick="location.reload()">Refresh</button>';document.body.appendChild(el);}
+function updateAppBadge(){try{if(navigator.setAppBadge){const n=actionRows().length;if(n)navigator.setAppBadge(n);else navigator.clearAppBadge&&navigator.clearAppBadge();}}catch(e){}}
 function boot(){idbGet(KEY).then(v=>{if(v)return bootFrom(v);const raw=localStorage.getItem(KEY);if(raw){idbPut(KEY,raw).catch(()=>{});return bootFrom(raw);}state=defaultState();startApp();}).catch(()=>{const raw=localStorage.getItem(KEY);if(raw)return bootFrom(raw);state=defaultState();startApp();});}
 function bootFrom(raw){let env=null;try{env=JSON.parse(raw);}catch(e){}loadedTs=(env&&+env.ts)||0;if(env&&env.enc===true){if(!cryptoOK()){alert('This data is encrypted but your browser cannot decrypt it here. Open in Chrome or Safari.');state=defaultState();return startApp();}currentSalt=_unb64(env.salt);pendingEnv=env;document.getElementById('wrap').style.display='none';document.getElementById('unlockOverlay').classList.add('show');setTimeout(()=>{const el=document.getElementById('unlockPass');el&&el.focus();},60);return;}state=migrate(env&&env.enc===false?env.data:env);startApp();}
 
@@ -1771,7 +1795,7 @@ function setTab(t){activeTab=t;renderTabsNav();renderTab();window.scrollTo(0,0);
 function renderTab(){const showKpi=['Overview','Pipeline'].includes(activeTab);let body='';
   if(activeTab==='Overview')body=renderOverview();else if(activeTab==='Pipeline')body=renderPipeline();else if(activeTab==='Clients')body=renderClients();else if(activeTab==='Finances')body=renderFinances();else if(activeTab==='Agreements')body=renderAgreements();else if(activeTab==='Documents')body=renderDocuments();else if(activeTab==='Messages')body=renderMessages();else if(activeTab==='Settings')body=renderSettings();
   document.getElementById('view').innerHTML=(showKpi?`<div id="kpiStrip">${kpiStripHTML()}</div>`:'')+body;
-  if(activeTab==='Pipeline')mountBoard();if(activeTab==='Settings'){mountSettingMS();updateStorageQuota();}if(activeTab==='Clients')mountClients();if(activeTab==='Agreements')mountAgreements();updateCapBadge();}
+  if(activeTab==='Pipeline')mountBoard();if(activeTab==='Settings'){mountSettingMS();updateStorageQuota();}if(activeTab==='Clients')mountClients();if(activeTab==='Agreements')mountAgreements();updateCapBadge();updateAppBadge();}
 setupChartTip();boot();
 </script>
 </body>
