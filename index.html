@@ -361,7 +361,7 @@ const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
 const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.1.0',APP_BUILD='2026-07-11';
+const APP_VERSION='2.1.0',APP_BUILD='2026-07-13';
 const CHANGELOG=[
  ['2.1.0','Installable PWA: offline app shell, new-version toast, backup-file handler (open a .json straight into the app), attention-count icon badge · linked USB backup file (load on open, write on save) · GitHub Pages deployment'],
  ['2.0.0','IndexedDB-primary storage · retainers · invoice register with chase messages · pipeline archive · 30-day trash · client timelines · quote PDFs · Robux/DevEx tracker · evidence-based rate card with target-rate floors · Discord & additional-clients support · data health check'],
@@ -800,7 +800,7 @@ function receivableGbp(c){return jobValueGbp(c)*approvedPct(c)/100;}
 function paidByMonth(){const map={};state.commissions.forEach(c=>{const v=jobValueGbp(c);(c.milestones||[]).forEach(m=>{if(m.status==='paid'&&m.paidMonth){map[m.paidMonth]=(map[m.paidMonth]||0)+v*(+m.pct||0)/100;}});});return map;}
 
 /* FX */
-function updateFxBadge(){const s=state.settings;const el=document.getElementById('fxBadge');if(!el)return;const dt=s.fxDate?new Date(s.fxDate).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'';el.innerHTML=`USD→GBP <b>${s.fxUsdGbp.toFixed(4)}</b> · ${s.fxLive?'live':'manual'} ${dt} · R$ net ${s.sym}${(s.devex*s.fxUsdGbp).toFixed(5)}`;}
+function updateFxBadge(){const s=state.settings;const el=document.getElementById('fxBadge');if(!el)return;const dt=s.fxDate?new Date(s.fxDate).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'';el.innerHTML=`USD→GBP <b>${s.fxUsdGbp.toFixed(4)}</b> · ${s.fxLive?'live · ECB rate of '+dt:'manual '+dt} · R$ net ${s.sym}${(s.devex*s.fxUsdGbp).toFixed(5)}`;el.title=s.fxLive?'Fetched live on open. The ECB publishes reference rates on working days (~4pm CET) — on weekends and Mondays before publication, the newest official rate is the previous working day’s.':'Rate entered manually in Settings.';}
 function fetchFX(){fetch(FX_URL).then(r=>r.json()).then(j=>{if(j&&j.rates&&j.rates.GBP){state.settings.fxUsdGbp=j.rates.GBP;state.settings.fxDate=j.date;state.settings.fxLive=true;save();updateFxBadge();renderTab();}}).catch(()=>{state.settings.fxLive=false;updateFxBadge();});}
 function refreshFXManual(){fetch(FX_URL).then(r=>r.json()).then(j=>{if(j&&j.rates&&j.rates.GBP){state.settings.fxUsdGbp=j.rates.GBP;state.settings.fxDate=j.date;state.settings.fxLive=true;save();updateFxBadge();renderTab();alert('Live rate updated: USD→GBP '+j.rates.GBP+' ('+j.date+').');}else throw 0;}).catch(()=>{alert('Could not fetch the live rate.\n\nThis usually means the dashboard is opened as a local file — browsers block internet requests from file pages for security. Type the current USD→GBP rate into the box and click Save settings. You can find it by searching \"USD to GBP\".');});}
 
