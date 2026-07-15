@@ -363,8 +363,9 @@ const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
 const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.4.0',APP_BUILD='2026-07-13';
+const APP_VERSION='2.5.0',APP_BUILD='2026-07-15';
 const CHANGELOG=[
+ ['2.5.0','37x scorecard (studio performance + weekly Discord post) · multi-operator accounts with roles (admin / operator / viewer) · payment reconciliation (Stripe webhook + manual) auto-marks invoices paid · stage-history tracking for cycle-time analytics'],
  ['2.4.0','Discord ticket bot: TicketTool-style button panel opens a private thread + Inbox commission · reply natively in the thread (logged to a transcript) · pipeline changes auto-post to the thread · archives on Paid · /panel /link /status commands'],
  ['2.3.0','37x Engine server: client status portal with quote acceptance · Discord tandem (daily brief + acceptance pings) · live cross-device refresh · automatic server backups · row-level version history with restore'],
  ['2.2.0','Client–server mode: optional self-hosted server (zero-dependency Node + SQLite) owns the data — row-level batched sync on every save, offline cache with automatic retry, multi-device via one URL + token'],
@@ -864,7 +865,8 @@ function mountBoard(){const el=document.getElementById('board');if(!el)return;co
   attachDnD();}
 function attachDnD(){document.querySelectorAll('.ticket').forEach(t=>{t.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',t.dataset.id);setTimeout(()=>t.style.opacity='.4',0);});t.addEventListener('dragend',()=>t.style.opacity='1');});
   document.querySelectorAll('.col').forEach(col=>{col.addEventListener('dragover',e=>{e.preventDefault();col.classList.add('drag-over');});col.addEventListener('dragleave',()=>col.classList.remove('drag-over'));col.addEventListener('drop',e=>{e.preventDefault();col.classList.remove('drag-over');const id=e.dataTransfer.getData('text/plain'),stage=col.dataset.stage;const c=state.commissions.find(x=>x.id===id);if(c&&c.stage!==stage){setStage(c,stage);save();mountBoard();refreshKpi();}});});}
-function setStage(c,stage){if(c.stage!==stage)c.stageSince=todayStr();c.stage=stage;if(stage==='quoted'&&!c.quotedAt)c.quotedAt=todayStr();if(stage==='lost'&&!c.lostReason){const r=prompt('Why was it lost? (optional — price, timing, ghosted…)');if(r)c.lostReason=r;}if(stage==='paid'){(c.milestones||[]).forEach(m=>{m.status='paid';if(!m.paidMonth)m.paidMonth=thisMonthKey();});}}
+function pushStageHistory(c,stage){if(!Array.isArray(c.stageHistory))c.stageHistory=[];const last=c.stageHistory[c.stageHistory.length-1];if(!last||last.s!==stage){c.stageHistory.push({s:stage,at:new Date().toISOString()});if(c.stageHistory.length>40)c.stageHistory.shift();}}
+function setStage(c,stage){if(c.stage!==stage){c.stageSince=todayStr();pushStageHistory(c,stage);}c.stage=stage;if(stage==='quoted'&&!c.quotedAt)c.quotedAt=todayStr();if(stage==='lost'&&!c.lostReason){const r=prompt('Why was it lost? (optional — price, timing, ghosted…)');if(r)c.lostReason=r;}if(stage==='paid'){(c.milestones||[]).forEach(m=>{m.status='paid';if(!m.paidMonth)m.paidMonth=thisMonthKey();});}}
 function refreshKpi(){const el=document.getElementById('kpiStrip');if(el)el.innerHTML=kpiStripHTML();}
 
 /* Overview */
@@ -1429,7 +1431,7 @@ function saveCommission(){const title=document.getElementById('f_title').value.t
   const obj={title,clientId:v('f_client'),service:v('f_service'),type:v('f_type'),payMethod:v('f_method'),robux:+v('f_robux')||0,gbpAmount:+v('f_gbp')||0,deadline:v('f_deadline'),stage:v('f_stage'),priority:v('f_priority'),source:v('f_source'),sourceMode:v('f_source_mode'),rigMode:v('f_rig_mode'),revInc:+v('f_revInc')||0,revUsed:Math.max(0,+v('f_revUsed')||0),sow:v('f_sow'),scope:v('f_scope').trim(),notes:v('f_notes').trim(),hoursLogged:Math.max(0,+v('f_hours')||0),lostReason:v('f_lostReason').trim(),coClients:coSel.slice(),milestones:readMilestones(),checklist:readChecklist()};
   const id=v('f_id');
   if(obj.stage==='quoted'){const prev=id?state.commissions.find(x=>x.id===id):null;obj.quotedAt=(prev&&prev.quotedAt)||todayStr();}
-  if(id){const c=state.commissions.find(x=>x.id===id);if(c.stage!==obj.stage)obj.stageSince=todayStr();Object.assign(c,obj);if(obj.stage==='paid')setStage(c,'paid');}else{obj.id=uid();obj.stageSince=todayStr();state.commissions.push(obj);}
+  if(id){const c=state.commissions.find(x=>x.id===id);const changed=c.stage!==obj.stage;if(changed)obj.stageSince=todayStr();Object.assign(c,obj);if(changed)pushStageHistory(c,obj.stage);if(obj.stage==='paid')setStage(c,'paid');}else{obj.id=uid();obj.stageSince=todayStr();obj.stageHistory=[{s:obj.stage,at:new Date().toISOString()}];state.commissions.push(obj);}
   save();closeCommission();renderTab();}
 function deleteCommission(){const id=document.getElementById('f_id').value;if(id&&confirm('Move this commission to the trash?\n(Restorable for 30 days from Settings → Data.)')){const c=state.commissions.find(x=>x.id===id);if(c)trashAdd('commission',c);state.commissions=state.commissions.filter(x=>x.id!==id);save();closeCommission();renderTab();}}
 function duplicateCommission(){const id=document.getElementById('f_id').value;const c=state.commissions.find(x=>x.id===id);if(!c)return;
@@ -1736,8 +1738,11 @@ function serverSectionHTML(){return `<div class="tg-h" style="margin-top:16px">S
     ${srvCfg.on?`<button class="danger sm" onclick="disableServerMode()">Turn off server mode</button><button class="ghost sm" onclick="pushAllToServer()" title="re-uploads every record — use after restoring a backup locally">Push everything to server</button>`:`<button class="primary sm" onclick="enableServerMode()">Enable server mode</button>`}
   </div>
   <p class="mini" style="margin-top:8px">Enabling makes the server the source of truth: this device loads from it on open and writes every change back (row-level, batched), and other devices refresh live as it changes. Local storage becomes an offline cache. The token is stored only on this device — never in backups. Protect the server with HTTPS and keep the token secret.</p>
-  ${srvCfg.on&&srvStatus!=='auth'?`<div class="tg-h" style="margin-top:16px">Discord tandem <span class="mini" style="text-transform:none;letter-spacing:0">— daily brief + quote-acceptance pings</span></div><div id="srvDiscordBox"><p class="mini">Loading…</p></div>
-  <div class="tg-h" style="margin-top:16px">Server backups <span class="mini" style="text-transform:none;letter-spacing:0">— automatic nightly snapshots on the server</span></div><div id="srvBackupBox"><p class="mini">Loading…</p></div>`:''}`;}
+  ${srvCfg.on&&srvStatus!=='auth'?`<p class="mini" id="srvWhoBox" style="margin-top:10px"></p>
+  <div class="tg-h" style="margin-top:16px">37x scorecard <span class="mini" style="text-transform:none;letter-spacing:0">— studio performance</span></div><div id="srvScoreBox"><p class="mini">Loading…</p></div>
+  <div class="tg-h" style="margin-top:16px">Discord tandem <span class="mini" style="text-transform:none;letter-spacing:0">— daily brief + quote-acceptance pings</span></div><div id="srvDiscordBox"><p class="mini">Loading…</p></div>
+  <div class="tg-h" style="margin-top:16px">Server backups <span class="mini" style="text-transform:none;letter-spacing:0">— automatic nightly snapshots on the server</span></div><div id="srvBackupBox"><p class="mini">Loading…</p></div>
+  <div id="srvOpsWrap"></div>`:''}`;}
 async function testServer(){const url=(document.getElementById('srv_url')||{}).value||srvCfg.url;const tok=(document.getElementById('srv_token')||{}).value||srvCfg.token;
   const old={...srvCfg};srvCfg.url=url.trim();srvCfg.token=tok.trim();
   try{const h=await srvFetch('/api/health');if(!h.ok)throw new Error('health '+h.status);
@@ -1763,9 +1768,32 @@ function initServerRetry(){if(srvTimer)return;srvTimer=setInterval(()=>{if(srvCf
 let srvLastRev=null;
 /* Discord + backups + portal + history — server-mode extras */
 async function loadServerConfig(){try{const r=await srvFetch('/api/config');if(!r.ok)return null;return await r.json();}catch(e){return null;}}
+let srvWho=null;
 function mountServerExtras(){if(!srvCfg.on||srvStatus==='auth')return;
   loadServerConfig().then(c=>{const el=document.getElementById('srvDiscordBox');if(el&&c){el.innerHTML=discordBoxHTML(c);}});
-  refreshBackupList();}
+  refreshBackupList();refreshScorecard();refreshWhoAndOps();}
+async function refreshWhoAndOps(){try{const r=await srvFetch('/api/me');if(!r.ok)return;srvWho=await r.json();
+  const el=document.getElementById('srvWhoBox');if(el)el.innerHTML='Signed in as <b>'+esc(srvWho.name)+'</b> · role <b>'+esc(srvWho.role)+'</b>'+(srvWho.role==='viewer'?' — <span style="color:var(--warn)">read-only</span>':'');
+  if(srvWho.role==='admin'){const w=document.getElementById('srvOpsWrap');if(w){const list=await srvFetch('/api/operators').then(x=>x.ok?x.json():[]);
+    w.innerHTML=`<div class="tg-h" style="margin-top:16px">Operators <span class="mini" style="text-transform:none;letter-spacing:0">— team access &amp; roles</span></div>
+    <div class="tbl-scroll" style="max-height:200px"><table><tbody>${list.map(o=>`<tr><td><b>${esc(o.name)}</b>${o.you?' <span class="badge">you</span>':''}</td><td class="mini">${esc(o.role)}</td><td style="text-align:right">${o.you?'':`<button class="danger sm" onclick="revokeOperator('${esc(o.tokenTail)}')">Revoke</button>`}</td></tr>`).join('')}</tbody></table></div>
+    <div class="inline-form" style="margin-top:10px"><div class="fld"><label>Name</label><input id="op_name" placeholder="e.g. Sam"></div><div class="fld" style="max-width:140px"><label>Role</label><select id="op_role"><option value="operator">Operator (edit)</option><option value="viewer">Viewer (read-only)</option><option value="admin">Admin</option></select></div><button class="primary sm" onclick="addOperator()">Add operator</button></div>
+    <p class="mini">Each operator gets their own access token (shown once). Operators can edit data but not manage team, config or the bot; viewers are read-only. Enforced server-side.</p>`;}}
+  else{const w=document.getElementById('srvOpsWrap');if(w)w.innerHTML='';}
+}catch(e){}}
+async function addOperator(){const name=(document.getElementById('op_name').value||'').trim();const role=document.getElementById('op_role').value;if(!name){alert('Enter a name.');return;}
+  const r=await srvFetch('/api/operators',{method:'POST',body:JSON.stringify({name,role})});if(!r.ok){alert('Failed.');return;}const j=await r.json();
+  try{await navigator.clipboard.writeText(j.token);}catch(e){}
+  alert('Operator “'+j.name+'” created ('+j.role+').\n\nTheir access token (copied — share it securely, it won’t be shown again):\n\n'+j.token+'\n\nThey enter it in Settings → Server mode on their device.');refreshWhoAndOps();}
+async function revokeOperator(tail){if(!confirm('Revoke this operator’s access?'))return;const r=await srvFetch('/api/operators/'+tail,{method:'DELETE'});if(!r.ok){alert('Failed.');return;}refreshWhoAndOps();}
+async function refreshScorecard(){const el=document.getElementById('srvScoreBox');if(!el)return;try{const r=await srvFetch('/api/scorecard?days=7');if(!r.ok)return;const s=await r.json();
+  const stat=(l,v)=>`<div><span class="is-l">${l}</span><span class="is-v">${v}</span></div>`;
+  el.innerHTML=`<div class="inc-stats" style="margin-top:0;border-top:none;padding-top:0;grid-template-columns:repeat(3,1fr)">
+    ${stat('Completed (7d)',s.completed)}${stat('Revenue',fmtGraw(s.revenue))}${stat('Win rate',s.winRate==null?'—':s.winRate+'%')}
+    ${stat('Avg cycle',s.avgCycle==null?'—':s.avgCycle+'d')}${stat('Active pipeline',s.pipeline)}${stat('Top earner',esc(s.topService||'—'))}</div>
+    <div class="row-flex" style="margin-top:10px"><button class="ghost sm" onclick="sendScorecard()">Post scorecard to Discord</button><span class="mini">A weekly scorecard also posts automatically on your chosen day.</span></div>`;
+}catch(e){}}
+async function sendScorecard(){const r=await srvFetch('/api/notify/scorecard',{method:'POST'});alert(r.ok?'Scorecard posted to Discord.':'Failed — save a Discord webhook first.');}
 function discordBoxHTML(c){return `<div class="row2"><div><label>Discord webhook URL <span class="mini">(channel → Integrations → Webhooks)</span></label><input id="dc_hook" placeholder="${c.discordWebhook==='set'?'•••• already set — paste to replace':'https://discord.com/api/webhooks/…'}"></div><div><label>Daily brief hour (0–23, server time)</label><input id="dc_hour" type="number" min="0" max="23" value="${c.digestHour!=null?c.digestHour:8}"></div></div>
   <div class="row-flex" style="margin-top:8px">
     <label class="mini" style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="dc_od" ${c.notifyOverdue?'checked':''} style="width:auto"> overdue</label>
