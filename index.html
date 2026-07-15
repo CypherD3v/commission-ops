@@ -361,8 +361,9 @@ const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
 const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.1.0',APP_BUILD='2026-07-13';
+const APP_VERSION='2.2.0',APP_BUILD='2026-07-13';
 const CHANGELOG=[
+ ['2.2.0','Client–server mode: optional self-hosted server (zero-dependency Node + SQLite) owns the data — row-level batched sync on every save, offline cache with automatic retry, multi-device via one URL + token'],
  ['2.1.0','Installable PWA: offline app shell, new-version toast, backup-file handler (open a .json straight into the app), attention-count icon badge · linked USB backup file (load on open, write on save) · GitHub Pages deployment'],
  ['2.0.0','IndexedDB-primary storage · retainers · invoice register with chase messages · pipeline archive · 30-day trash · client timelines · quote PDFs · Robux/DevEx tracker · evidence-based rate card with target-rate floors · Discord & additional-clients support · data health check'],
  ['1.5','Light theme · Lost stage & win rate · quote validity · hours logged & £/hr · VAT threshold bar · global search · next-action nudges · backup hardening · encryption save-race fix · contract terms aligned & typeset'],
@@ -741,6 +742,11 @@ function defaultState(){const s=sampleState();s.clients=[];s.commissions=[];s.ex
 let state=defaultState();let activeTab='Overview';let incomeView='monthly';let incomeRange=6;
 let cryptoKey=null,currentSalt=null,encEnabled=false,pendingEnv=null,saveTimer=null;
 let loadedTs=0,linkedHandle=null,linkedName='',linkedState='none';const HKEY='commission_ops_fs_handle';
+const SKEY='commission_ops_server';
+let srvCfg=(()=>{try{return Object.assign({url:'',token:'',on:false},JSON.parse(localStorage.getItem(SKEY)||'{}'));}catch(e){return{url:'',token:'',on:false};}})();
+let srvShadow=null,srvDirty=false,srvStatus=srvCfg.on?'offline':'off',srvTimer=null;
+const SRV_COLLS=['clients','commissions','invoices','retainers','agreements','expenses','cashouts','trash'];
+const SRV_KV=['settings','templates','messages','rates'];
 let clientFilter='',agrFilter='';
 
 function migrate(s){const d=defaultState();return Object.assign({},d,s,{settings:Object.assign({},d.settings,s.settings),templates:Object.assign({},d.templates,s.templates)});}
@@ -751,7 +757,7 @@ async function _persistOnce(){let payload;const ts=Date.now();try{if(encEnabled&
   let ok=false,err=null;
   try{await idbPut(KEY,payload);ok=true;}catch(e){err=e;}
   try{localStorage.setItem(KEY,payload);ok=true;}catch(e){if(!err)err=e;}
-  if(ok){saveErrBanner(false);loadedTs=ts;await writeLinked(payload);}else{console.warn('Could not save:',err&&err.message);saveErrBanner(true,err&&err.message);}}
+  if(ok){saveErrBanner(false);loadedTs=ts;await writeLinked(payload);if(srvCfg.on)await serverSync();}else{console.warn('Could not save:',err&&err.message);saveErrBanner(true,err&&err.message);}}
 function saveErrBanner(on,msg){const el=document.getElementById('saveErrBanner');if(!el)return;el.style.display=on?'block':'none';if(on)el.textContent='⚠ SAVING FAILED — your latest changes are NOT stored ('+(msg||'storage error')+'). Export a backup now, then free space (prune signed snapshots in Agreements).';}
 /* ---- IndexedDB primary store (localStorage kept as a fallback copy) ---- */
 function idbOpen(){return new Promise((res,rej)=>{if(!window.indexedDB)return rej(new Error('no idb'));const q=indexedDB.open('commission_ops_mirror',1);q.onupgradeneeded=()=>{q.result.createObjectStore('kv');};q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});}
@@ -870,11 +876,12 @@ function actionRows(){const today=todayStr();const since=d=>Math.floor((new Date
   });
   (state.invoices||[]).forEach(r=>{if(r.status==='unpaid'&&r.due&&r.due<today){const od=daysSince(r.due);rows.push({sev:od>14?'bad':'warn',grp:'Money to collect',t:`Invoice <b>${esc(r.no)}</b> ${od}d overdue — ${esc(r.title||'')} (${fmtGraw(r.amountNet)}) — chase from the register`,on:`setTab('Finances')`});}});
   state.commissions.forEach(c=>{if(c.retainerId&&c.stage==='in_progress'&&paidPct(c)===0&&!(state.invoices||[]).some(i=>i.commissionId===c.id))rows.push({sev:'warn',grp:'Retainers',t:`Send this month's retainer invoice — <b>${esc(c.title)}</b>`,on:`editCommission('${c.id}')`});});
-  {const hasData=state.commissions.length||state.clients.length;const synced=linkedHandle&&linkedState==='ok';const lb=state.settings.lastBackup;const dd=lb?daysSince(lb):null;if(hasData&&!synced&&(dd==null||dd>=4))rows.push({sev:(dd==null||dd>=10)?'bad':'warn',grp:'Backups',t:dd==null?'No backup exported yet — your data lives only in this browser':`Last backup <b>${dd} days ago</b> — export a fresh one`,on:`setTab('Settings')`});}
+  if(srvCfg.on&&srvDirty)rows.push({sev:srvStatus==='auth'?'bad':'warn',grp:'Server sync',t:srvStatus==='auth'?'Server token rejected — changes are NOT reaching the server':'Changes queued for the server — retrying automatically every 30s',on:`setTab('Settings')`});
+  {const hasData=state.commissions.length||state.clients.length;const synced=(linkedHandle&&linkedState==='ok')||(srvCfg.on&&srvStatus==='ok'&&!srvDirty);const lb=state.settings.lastBackup;const dd=lb?daysSince(lb):null;if(hasData&&!synced&&(dd==null||dd>=4))rows.push({sev:(dd==null||dd>=10)?'bad':'warn',grp:'Backups',t:dd==null?'No backup exported yet — your data lives only in this browser':`Last backup <b>${dd} days ago</b> — export a fresh one`,on:`setTab('Settings')`});}
   state.clients.forEach(cl=>{const hasWork=state.commissions.some(c=>c.clientId===cl.id&&c.stage!=='inbox');if(hasWork&&cl.msa!=='signed')rows.push({sev:'warn',grp:'Paperwork',t:`MSA not signed — <b>${esc(clientName(cl))}</b> (${cl.msa||'none'})`,on:`editClient('${cl.id}')`});});
   (state.agreements||[]).forEach(a=>{if(a.status==='draft'||a.status==='sent'){const dd=since(a.date);if(dd>=5)rows.push({sev:dd>=10?'bad':'warn',grp:'Agreements stalling',t:`${esc(a.type)} still <b>${a.status}</b> after ${dd} days — ${esc(a.title)}`,on:`setTab('Agreements')`});}});
   return rows;}
-function renderActionCenter(){const rows=actionRows();const cats=[['Overdue','bad'],['Backups','bad'],['Money to collect','warn'],['Retainers','warn'],['At risk','warn'],['Quotes going stale','warn'],['Agreements stalling','warn'],['Extra revisions','warn'],['To quote','warn'],['Paperwork','warn']];
+function renderActionCenter(){const rows=actionRows();const cats=[['Overdue','bad'],['Server sync','bad'],['Backups','bad'],['Money to collect','warn'],['Retainers','warn'],['At risk','warn'],['Quotes going stale','warn'],['Agreements stalling','warn'],['Extra revisions','warn'],['To quote','warn'],['Paperwork','warn']];
   const byGrp={};rows.forEach(r=>{(byGrp[r.grp]=byGrp[r.grp]||[]).push(r);});
   const present=cats.filter(([g])=>byGrp[g]&&byGrp[g].length);
   const CAP=6;const blocks=present.map(([g,sev])=>{const items=byGrp[g],shown=items.slice(0,CAP),more=items.length-shown.length;return `<div class="att-cat"><div class="att-head"><span class="act-dot ${sev}"></span>${g}<span class="att-n">${items.length}</span></div>${shown.map(r=>`<div class="act-row" onclick="${r.on}"><span class="act-dot ${r.sev}"></span><span>${r.t}</span></div>`).join('')}${more>0?`<div class="act-row" style="color:var(--muted);cursor:default"><span class="act-dot" style="background:transparent"></span><span>+${more} more…</span></div>`:''}</div>`;}).join('');
@@ -1311,7 +1318,7 @@ function renderSettings(){return `<div class="grid-2"><div class="stack">
   <section class="card"><h2>Default milestone schedule <span class="hint">seeds new commissions</span></h2><div class="ms-block"><div id="set_milestones"></div><div class="row-flex" style="justify-content:space-between"><button class="ghost sm" onclick="addSettingMS()">+ Add milestone</button><span class="ms-total" id="setMsTotal"></span></div></div><div style="margin-top:12px"><button class="primary sm" onclick="saveSettingMS()">Save schedule</button></div></section></div>
   <div class="stack"><section class="card"><h2>Data <span class="hint">last backup: ${state.settings.lastBackup?state.settings.lastBackup+' · '+daysSince(state.settings.lastBackup)+'d ago':'never'}</span></h2><div class="row-flex"><button class="primary" onclick="exportData()">Export backup</button><button class="ghost" onclick="document.getElementById('importFile').click()">Import backup</button><button class="ghost sm" onclick="exportDraftsMd()">Export drafts (.md)</button><button class="ghost" onclick="loadSample()">Reset to sample</button><button class="danger" onclick="clearAll()">Clear all data</button></div><p class="mini" style="margin-top:12px">Data lives in this browser's <b>IndexedDB</b> (tens of MB of headroom), with a localStorage fallback copy kept automatically. <b>Export backup</b> saves a JSON file of everything — in Chrome it writes straight to a file you pick; elsewhere it downloads. <b>Import backup</b> previews the contents and lets you replace or merge. Back up regularly — the file is your only safety net if the browser is cleared or you switch machines.</p>
       <div class="row-flex" style="margin-top:12px"><label class="mini" style="display:flex;align-items:center;gap:7px;margin:0"><input type="checkbox" ${state.settings.autoPruneSigned?'checked':''} onchange="state.settings.autoPruneSigned=this.checked;save()" style="width:auto"> Auto-prune snapshots when marked <b>signed</b></label><button class="ghost sm" onclick="pruneSignedNow()">Prune signed now</button></div>
-      <p class="mini" style="margin-top:6px">Removes the heavy document text from signed records (keeping the signed-copy link) so the archive stays tiny. Open a pruned record and it opens the signed copy link instead.</p>${linkSectionHTML()}${storageMeterHTML()}${trashHTML()}</section>
+      <p class="mini" style="margin-top:6px">Removes the heavy document text from signed records (keeping the signed-copy link) so the archive stays tiny. Open a pruned record and it opens the signed copy link instead.</p>${serverSectionHTML()}${linkSectionHTML()}${storageMeterHTML()}${trashHTML()}</section>
   ${securityCard()}</div></div>
   <section class="card" style="margin-top:16px"><h2>Edit rate card</h2><table><thead><tr><th>Service</th><th>Note</th><th>Low R$</th><th>High R$</th><th></th></tr></thead><tbody>${state.rates.map((r,i)=>`<tr><td><input value="${esc(r.svc)}" onchange="state.rates[${i}].svc=this.value;save()"></td><td><input value="${esc(r.rng)}" onchange="state.rates[${i}].rng=this.value;save()"></td><td><input type="number" value="${r.low}" onchange="state.rates[${i}].low=+this.value;save()"></td><td><input type="number" value="${r.high}" onchange="state.rates[${i}].high=+this.value;save()"></td><td style="width:34px"><button class="danger sm" onclick="state.rates.splice(${i},1);save();renderTab()">✕</button></td></tr>`).join('')}</tbody></table><div class="inline-form" style="margin-top:14px;align-items:center"><div class="fld" style="max-width:150px"><label>Target rate (£/hr)</label><input type="number" min="0" step="0.5" value="${state.settings.targetRateGBP??20}" onchange="state.settings.targetRateGBP=Math.max(0,+this.value||0);save();renderTab()"></div><p class="mini" style="flex:1;margin:0">Powers the suggested floors on the Finances rate card: average logged hours at a tier × this rate. Set it to what your time needs to earn.</p></div>
 <div style="margin-top:8px"><button class="ghost sm" onclick="state.rates.push({svc:'New service',rng:'',low:1000,high:5000});save();renderTab()">+ Add service</button></div></section>
@@ -1684,6 +1691,61 @@ async function exportData(){try{let payload;const ts=Date.now();if(encEnabled&&c
   if(!done)dlFile(payload,fname);
   state.settings.lastBackup=todayStr();save();if(activeTab==='Settings'||activeTab==='Overview')renderTab();}catch(e){alert('Export failed: '+(e&&e.message));}}
 function exportDraftsMd(){const md='# Client Message Drafts\n\n_Generated from the dashboard on '+todayStr()+' — the Messages tab is the canonical version._\n\n'+state.messages.map(m=>'## '+m.label+'\n\n'+m.body+'\n').join('\n---\n\n');dlFile(md,'client-message-drafts.md','text/markdown');}
+/* ---- server mode (client–server): the server owns the data ---- */
+function srvSave(){try{localStorage.setItem(SKEY,JSON.stringify(srvCfg));}catch(e){}}
+function srvRowId(coll,x){return coll==='trash'?x.tid:x.id;}
+function srvEmptyShadow(){return {collections:Object.fromEntries(SRV_COLLS.map(c=>[c,{}])),kv:Object.fromEntries(SRV_KV.map(k=>[k,' never']))};}
+function srvSnapshot(){const s={collections:{},kv:{}};SRV_COLLS.forEach(c=>{const m={};(state[c]||[]).forEach(x=>{const id=srvRowId(c,x);if(id)m[id]=JSON.stringify(x);});s.collections[c]=m;});SRV_KV.forEach(k=>{s.kv[k]=JSON.stringify(state[k]==null?null:state[k]);});return s;}
+function srvDiffOps(){const ops=[];SRV_COLLS.forEach(c=>{const old=srvShadow.collections[c]||{};const seen=new Set();(state[c]||[]).forEach(x=>{const id=srvRowId(c,x);if(!id)return;seen.add(id);const j=JSON.stringify(x);if(old[id]!==j)ops.push({op:'put',coll:c,id,json:x});});Object.keys(old).forEach(id=>{if(!seen.has(id))ops.push({op:'del',coll:c,id});});});
+  SRV_KV.forEach(k=>{const j=JSON.stringify(state[k]==null?null:state[k]);if(srvShadow.kv[k]!==j)ops.push({op:'kv',key:k,json:state[k]});});return ops;}
+async function srvFetch(p,opt){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),12000);try{return await fetch(srvCfg.url.replace(/\/+$/,'')+p,Object.assign({headers:{'Authorization':'Bearer '+(srvCfg.token||''),'Content-Type':'application/json'},signal:ctl.signal},opt||{}));}finally{clearTimeout(t);}}
+async function serverSync(){if(!srvCfg.on||!srvCfg.url)return;try{
+  if(!srvShadow)srvShadow=srvEmptyShadow();
+  const ops=srvDiffOps();if(!ops.length){srvStatus='ok';srvDirty=false;updateSrvUI();return;}
+  const r=await srvFetch('/api/batch',{method:'POST',body:JSON.stringify(ops)});
+  if(r.status===401){srvStatus='auth';srvDirty=true;updateSrvUI();return;}
+  if(!r.ok)throw new Error('http '+r.status);
+  srvShadow=srvSnapshot();srvDirty=false;srvStatus='ok';updateSrvUI();
+}catch(e){srvStatus='offline';srvDirty=true;updateSrvUI();}}
+async function serverBoot(){try{
+  const r=await srvFetch('/api/state');
+  if(r.status===401){srvStatus='auth';alert('The server rejected the access token — fix it in Settings → Server mode.');throw new Error('auth');}
+  if(!r.ok)throw new Error('http '+r.status);
+  const snap=await r.json();
+  const empty=SRV_COLLS.every(c=>!(snap.collections[c]||[]).length)&&!snap.kv.settings;
+  if(empty){const raw=localStorage.getItem(KEY);if(raw){srvShadow=srvEmptyShadow();srvDirty=true;return bootFrom(raw);}state=defaultState();srvShadow=srvEmptyShadow();srvDirty=true;startApp();persist();return;}
+  const data={};SRV_KV.forEach(k=>{if(snap.kv[k]!=null)data[k]=snap.kv[k];});SRV_COLLS.forEach(c=>{data[c]=snap.collections[c]||[];});
+  state=migrate(data);srvShadow=srvSnapshot();srvStatus='ok';loadedTs=Date.now();startApp();persist();
+}catch(e){if(String(e.message)!=='auth'){srvStatus='offline';}srvDirty=true;
+  const raw=localStorage.getItem(KEY);
+  if(raw&&confirm('Server unreachable. Work from this device’s cached copy?\n\nChanges will sync automatically once the server is back.')){srvShadow=srvEmptyShadow();return bootFrom(raw);}
+  state=defaultState();srvShadow=srvEmptyShadow();startApp();}}
+function updateSrvUI(){const el=document.getElementById('srvStatusLine');if(el)el.innerHTML=srvStatusText();}
+function srvStatusText(){if(!srvCfg.on)return srvCfg.url?'Configured but <b>off</b> — this device uses local storage only.':'Not configured. Run <code>server.js</code> somewhere reachable, then enter its URL and token.';
+  return {ok:'🟢 <b>Connected</b> — the server owns the data; every save syncs row-level changes.'+(srvDirty?' (pending changes queued)':''),offline:'🔴 <b>Server unreachable</b> — working from the local cache; changes are queued and retry every 30s.',auth:'🔒 <b>Token rejected</b> — update the access token below.'}[srvStatus]||esc(srvStatus);}
+function serverSectionHTML(){return `<div class="tg-h" style="margin-top:16px">Server mode <span class="mini" style="text-transform:none;letter-spacing:0">— client–server: your own server owns the data (multi-device)</span></div>
+  <p class="mini" id="srvStatusLine" style="margin:6px 0 8px">${srvStatusText()}</p>
+  <div class="row2"><div><label>Server URL</label><input id="srv_url" placeholder="https://your-server.example.com" value="${esc(srvCfg.url)}"></div><div><label>Access token</label><input id="srv_token" type="password" placeholder="from data/token.txt on the server" value="${esc(srvCfg.token)}"></div></div>
+  <div class="row-flex" style="margin-top:10px">
+    <button class="ghost sm" onclick="testServer()">Test connection</button>
+    ${srvCfg.on?`<button class="danger sm" onclick="disableServerMode()">Turn off server mode</button><button class="ghost sm" onclick="pushAllToServer()" title="re-uploads every record — use after restoring a backup locally">Push everything to server</button>`:`<button class="primary sm" onclick="enableServerMode()">Enable server mode</button>`}
+  </div>
+  <p class="mini" style="margin-top:8px">Enabling makes the server the source of truth: this device loads from it on open and writes every change back (row-level, batched). Local storage becomes an offline cache, and the same URL + token on another device gives you real multi-device access. The token is stored only on this device — never in backups. Note: the server stores records readably (so a client portal can be built on it later); protect it with HTTPS and keep the token secret.</p>`;}
+async function testServer(){const url=(document.getElementById('srv_url')||{}).value||srvCfg.url;const tok=(document.getElementById('srv_token')||{}).value||srvCfg.token;
+  const old={...srvCfg};srvCfg.url=url.trim();srvCfg.token=tok.trim();
+  try{const h=await srvFetch('/api/health');if(!h.ok)throw new Error('health '+h.status);
+    const a=await srvFetch('/api/settings');if(a.status===401){alert('Server found, but the token was rejected.');srvCfg=old;return;}
+    if(!a.ok)throw new Error('auth check '+a.status);
+    alert('✓ Connected and authenticated.');srvSave();}
+  catch(e){alert('Could not reach the server: '+(e&&e.message)+'\n\nCheck the URL (must include https:// or http://) and that server.js is running.');srvCfg=old;}}
+function enableServerMode(){const url=(document.getElementById('srv_url').value||'').trim();const tok=(document.getElementById('srv_token').value||'').trim();
+  if(!url||!tok){alert('Enter the server URL and access token first (use Test connection to verify).');return;}
+  if(!confirm('Enable server mode?\n\nIf the server is empty, this device’s data is pushed up to seed it. If the server already has data, the SERVER copy wins on this device.\n\nThe app will reload.'))return;
+  srvCfg={url,token:tok,on:true};srvSave();location.reload();}
+function disableServerMode(){if(!confirm('Turn off server mode? This device keeps its local copy and stops syncing; the server keeps everything it has.'))return;srvCfg.on=false;srvSave();srvStatus='off';renderTab();}
+function pushAllToServer(){if(!confirm('Re-upload every record on this device to the server (overwriting same-id rows there)?'))return;srvShadow=srvEmptyShadow();srvDirty=true;persist().then(()=>alert(srvStatus==='ok'?'Pushed.':'Queued — server currently unreachable.'));}
+function initServerRetry(){if(srvTimer)return;srvTimer=setInterval(()=>{if(srvCfg.on&&srvDirty)persist();},30000);}
+
 /* ---- linked backup file (work straight off the USB stick — Chrome/Edge) ---- */
 function updateLinkUI(){const el=document.getElementById('linkStatus');if(el&&activeTab==='Settings')renderTab();}
 function showLinkBanner(msg){const b=document.getElementById('linkBanner');const t=document.getElementById('linkBannerTxt');if(b&&t){t.innerHTML=msg;b.style.display='block';}}
@@ -1765,7 +1827,7 @@ function filterGlobal(){const inp=document.getElementById('gSearch');const list=
   list.innerHTML=out.slice(0,12).map(o=>`<div class="combo-item" onmousedown="hideGlobal();${o.on}">${esc(o.t)} <span class="mini">${esc(o.s)}</span></div>`).join('')||'<div class="combo-item" style="cursor:default"><span class="mini">No matches.</span></div>';list.style.display='block';}
 function hideGlobal(){const l=document.getElementById('gList');if(l)l.style.display='none';}
 function setupChartTip(){document.addEventListener('mouseover',e=>{const c=e.target&&e.target.closest?e.target.closest('.dot,.tok'):null;if(!c)return;if(c.classList.contains('tok'))showTokTip(c);else showTip(c);});document.addEventListener('mouseout',e=>{const c=e.target&&e.target.closest?e.target.closest('.dot,.tok'):null;if(c)hideTip();});}
-function startApp(){ensureHtmlTemplates();normalizeCommissions();ensureMessages();purgeTrash();spawnDueRetainers();renderTabsNav();renderTab();updateFxBadge();fetchFX();initLinkedFile();initPWA();const vs=document.getElementById('verStamp');if(vs)vs.textContent='Commission Ops v'+APP_VERSION+' ('+APP_BUILD+') · ';}
+function startApp(){ensureHtmlTemplates();normalizeCommissions();ensureMessages();purgeTrash();spawnDueRetainers();renderTabsNav();renderTab();updateFxBadge();fetchFX();initLinkedFile();initPWA();initServerRetry();const vs=document.getElementById('verStamp');if(vs)vs.textContent='Commission Ops v'+APP_VERSION+' ('+APP_BUILD+') · ';}
 /* ---- PWA: service worker, update toast, icon badge, backup-file handler ---- */
 function initPWA(){try{
   if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){
@@ -1786,7 +1848,7 @@ function initPWA(){try{
 }catch(e){}}
 function showPwaToast(){if(document.getElementById('pwaToast'))return;const el=document.createElement('div');el.id='pwaToast';el.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--txt);color:var(--bg);padding:11px 16px;border-radius:10px;z-index:70;box-shadow:0 8px 24px rgba(20,25,35,.3);font-size:13.5px';el.innerHTML='A new version of Commission Ops is ready. <button style="margin-left:8px;border:none;border-radius:7px;padding:6px 12px;cursor:pointer;background:var(--accent);color:#fff;font-weight:600" onclick="location.reload()">Refresh</button>';document.body.appendChild(el);}
 function updateAppBadge(){try{if(navigator.setAppBadge){const n=actionRows().length;if(n)navigator.setAppBadge(n);else navigator.clearAppBadge&&navigator.clearAppBadge();}}catch(e){}}
-function boot(){idbGet(KEY).then(v=>{if(v)return bootFrom(v);const raw=localStorage.getItem(KEY);if(raw){idbPut(KEY,raw).catch(()=>{});return bootFrom(raw);}state=defaultState();startApp();}).catch(()=>{const raw=localStorage.getItem(KEY);if(raw)return bootFrom(raw);state=defaultState();startApp();});}
+function boot(){if(srvCfg.on&&srvCfg.url)return serverBoot();idbGet(KEY).then(v=>{if(v)return bootFrom(v);const raw=localStorage.getItem(KEY);if(raw){idbPut(KEY,raw).catch(()=>{});return bootFrom(raw);}state=defaultState();startApp();}).catch(()=>{const raw=localStorage.getItem(KEY);if(raw)return bootFrom(raw);state=defaultState();startApp();});}
 function bootFrom(raw){let env=null;try{env=JSON.parse(raw);}catch(e){}loadedTs=(env&&+env.ts)||0;if(env&&env.enc===true){if(!cryptoOK()){alert('This data is encrypted but your browser cannot decrypt it here. Open in Chrome or Safari.');state=defaultState();return startApp();}currentSalt=_unb64(env.salt);pendingEnv=env;document.getElementById('wrap').style.display='none';document.getElementById('unlockOverlay').classList.add('show');setTimeout(()=>{const el=document.getElementById('unlockPass');el&&el.focus();},60);return;}state=migrate(env&&env.enc===false?env.data:env);startApp();}
 
 /* render */
