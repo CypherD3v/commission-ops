@@ -259,6 +259,7 @@
     <div class="actions">
       <button class="danger" id="cDelete" onclick="deleteCommission()" style="display:none">Delete</button>
       <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
+        <button class="ghost" id="cHistBtn" onclick="showHistory('commissions',document.getElementById('f_id').value)" style="display:none" title="version history (server mode)">History</button>
         <button class="ghost" id="cDupBtn" onclick="duplicateCommission()" style="display:none" title="New job pre-filled from this one — fresh stage, milestones and dates">Duplicate</button>
         <button class="doc" id="cSowBtn" onclick="generateSOW()" style="display:none">Generate SOW</button>
         <button class="doc" id="cInvBtn" onclick="generateInvoice()" style="display:none">Invoice</button>
@@ -361,8 +362,9 @@ const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
 const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.2.0',APP_BUILD='2026-07-13';
+const APP_VERSION='2.3.0',APP_BUILD='2026-07-13';
 const CHANGELOG=[
+ ['2.3.0','37x Engine server: client status portal with quote acceptance · Discord tandem (daily brief + acceptance pings) · live cross-device refresh · automatic server backups · row-level version history with restore'],
  ['2.2.0','Client–server mode: optional self-hosted server (zero-dependency Node + SQLite) owns the data — row-level batched sync on every save, offline cache with automatic retry, multi-device via one URL + token'],
  ['2.1.0','Installable PWA: offline app shell, new-version toast, backup-file handler (open a .json straight into the app), attention-count icon badge · linked USB backup file (load on open, write on save) · GitHub Pages deployment'],
  ['2.0.0','IndexedDB-primary storage · retainers · invoice register with chase messages · pipeline archive · 30-day trash · client timelines · quote PDFs · Robux/DevEx tracker · evidence-based rate card with target-rate floors · Discord & additional-clients support · data health check'],
@@ -828,7 +830,7 @@ function kpiStripHTML(){const k=kpiData();const cards=[
 /* next action nudge */
 function nextAction(c){const cl=clientById(c.clientId);const ms=c.milestones||[];
   if(c.stage==='inbox')return 'Reply (draft #1), then quote it';
-  if(c.stage==='quoted'){if(cl&&cl.msa!=='signed')return 'Send MSA + SOW to sign (drafts #3–4)';if(c.sow!=='signed')return 'Get the SOW signed (draft #4)';return 'Send the deposit invoice (draft #5)';}
+  if(c.stage==='quoted'){if(c.quoteAcceptedAt){if(cl&&cl.msa!=='signed')return 'Accepted ✓ — send MSA + SOW to sign (drafts #3–4)';if(c.sow!=='signed')return 'Accepted ✓ — get the SOW signed (draft #4)';return 'Accepted ✓ — send the deposit invoice (draft #5)';}if(cl&&cl.msa!=='signed')return 'Send MSA + SOW to sign (drafts #3–4)';if(c.sow!=='signed')return 'Get the SOW signed (draft #4)';return 'Send the deposit invoice (draft #5)';}
   if(c.stage==='in_progress'){if(c.retainerId&&paidPct(c)===0)return 'Send this month’s retainer invoice';if(ms[0]&&ms[0].status!=='paid')return 'Deposit unpaid — chase or mark it paid';const nx=(c.checklist||[]).find(s=>!s.done);return nx?'Next: '+nx.label:'Send preview for review (draft #7)';}
   if(c.stage==='review')return approvedPct(c)>0?'Invoice the approved milestone':'Awaiting sign-off — nudge with draft #7';
   if(c.stage==='delivered')return ms.some(m=>m.status!=='paid')?'Delivery note + final invoice (draft #9)':'All paid — drag to Paid';
@@ -842,7 +844,7 @@ function ticketHTML(c,color){const pp=paidPct(c);const cl=clientById(c.clientId)
     ${c.priority&&c.priority!=='normal'?`<span class="flag" style="background:${PRIORITY_COLOR[c.priority]}" title="${c.priority} priority"></span>`:''}
     <div class="t-title">${esc(c.title)}</div><div class="t-client">${esc(clientName(cl))}${(c.coClients&&c.coClients.length)?` <span class="pill" title="${esc(c.coClients.map(id=>clientName(clientById(id))).join(', '))}">+${c.coClients.length}</span>`:''}</div>
     <div class="t-meta">${c.service?`<span class="pill" title="service / discipline">${esc(c.service)}</span>`:''}${c.type?`<span class="pill" style="opacity:.7" title="tier">${esc(c.type)}</span>`:''}<span class="price">${priceTxt}</span></div>
-    <div class="t-meta"><span class="pill">${methPill}</span>${c.retainerId?'<span class="pill" style="background:rgba(66,99,235,.13);color:var(--accent)" title="auto-created from a retainer">↻ retainer</span>':''}${c.sow&&c.sow!=='none'?`<span class="pill sow">SOW ${c.sow}</span>`:''}<span class="mini">${subTxt}</span></div>
+    <div class="t-meta"><span class="pill">${methPill}</span>${c.quoteAcceptedAt&&c.stage==='quoted'?'<span class="pill" style="background:rgba(47,158,68,.15);color:var(--good)" title="client accepted via portal '+esc(new Date(c.quoteAcceptedAt).toLocaleDateString('en-GB'))+'">✓ accepted</span>':''}${c.retainerId?'<span class="pill" style="background:rgba(66,99,235,.13);color:var(--accent)" title="auto-created from a retainer">↻ retainer</span>':''}${c.sow&&c.sow!=='none'?`<span class="pill sow">SOW ${c.sow}</span>`:''}<span class="mini">${subTxt}</span></div>
     ${!CLOSED(c.stage)?`<div class="pay-track"><div class="pay-fill" style="width:${pp}%"></div></div><div class="pay-label">${pp}% paid${pp<100?' · '+fmtGraw(Math.round(val*(100-pp)/100))+' outstanding':''}</div>`:''}
     ${(()=>{const done=(c.checklist||[]).filter(x=>x.done).length,tot=(c.checklist||[]).length,dis=!CLOSED(c.stage)?daysSince(c.stageSince):null;const bits=[];if(tot&&!CLOSED(c.stage))bits.push(`<span title="production checklist">☑ ${done}/${tot}</span>`);const ru=c.revUsed||0,ri=c.revInc||0,ov=ru-ri;if(ru>0||ov>0)bits.push(`<span style="color:${ov>0?'var(--bad)':ru===ri&&ri>0?'var(--warn)':'var(--muted)'}" title="revision rounds used / included">⟳ ${ru}/${ri}</span>`);if(c.stage==='quoted'&&c.quotedAt){const qd=daysSince(c.quotedAt),lim=+state.settings.quoteValidDays||14;bits.push(`<span style="color:${qd>lim?'var(--bad)':qd>lim*0.7?'var(--warn)':'var(--muted)'}" title="quote age vs validity window">quote ${qd}d/${lim}d</span>`);}if(dis!=null)bits.push(`<span style="color:${dis>14?'var(--bad)':dis>7?'var(--warn)':'var(--muted)'}" title="days in current stage">${dis}d in stage</span>`);return bits.length?`<div class="pay-label" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">${bits.join('')}</div>`:'';})()}
     ${c.stage==='lost'&&c.lostReason?`<div class="pay-label" title="reason lost">✕ ${esc(c.lostReason)}</div>`:''}
@@ -868,7 +870,8 @@ function actionRows(){const today=todayStr();const since=d=>Math.floor((new Date
   state.commissions.forEach(c=>{const nm=clientName(clientById(c.clientId));
     if(!CLOSED(c.stage)&&c.stage!=='delivered'&&c.deadline&&c.deadline<today)rows.push({sev:'bad',grp:'Overdue',t:`<b>${esc(c.title)}</b> · ${esc(nm)} — delivery ${dueLabel(c.deadline)}`,on:`editCommission('${c.id}')`});
     if(c.stage==='inbox')rows.push({sev:'warn',grp:'To quote',t:`New inquiry — <b>${esc(c.title)}</b> · ${esc(nm)}`,on:`editCommission('${c.id}')`});
-    if(c.stage==='quoted'&&c.quotedAt){const qd=daysSince(c.quotedAt),lim=+state.settings.quoteValidDays||14;if(qd>lim)rows.push({sev:'warn',grp:'Quotes going stale',t:`Quote ${qd}d old (valid ${lim}d) — <b>${esc(c.title)}</b> · ${esc(nm)} — re-confirm the price or mark Lost`,on:`editCommission('${c.id}')`});}
+    if(c.stage==='quoted'&&c.quoteAcceptedAt)rows.push({sev:'warn',grp:'Quotes accepted',t:`<b>${esc(c.title)}</b> · ${esc(nm)} accepted the quote — send contracts &amp; deposit invoice`,on:`editCommission('${c.id}')`});
+    if(c.stage==='quoted'&&c.quotedAt&&!c.quoteAcceptedAt){const qd=daysSince(c.quotedAt),lim=+state.settings.quoteValidDays||14;if(qd>lim)rows.push({sev:'warn',grp:'Quotes going stale',t:`Quote ${qd}d old (valid ${lim}d) — <b>${esc(c.title)}</b> · ${esc(nm)} — re-confirm the price or mark Lost`,on:`editCommission('${c.id}')`});}
     if(!CLOSED(c.stage)){const r=receivableGbp(c);if(r>0)rows.push({sev:'warn',grp:'Money to collect',t:`${fmtGraw(Math.round(r))} approved on <b>${esc(c.title)}</b> — invoice / chase`,on:`editCommission('${c.id}')`});}
     if((c.stage==='in_progress'||c.stage==='review')&&c.deadline){const du=-daysSince(c.deadline);const tot=(c.checklist||[]).length,done=(c.checklist||[]).filter(x=>x.done).length;if(du>=0&&du<=7&&tot&&done/tot<0.7)rows.push({sev:'warn',grp:'At risk',t:`<b>${esc(c.title)}</b> due ${du===0?'today':'in '+du+'d'} with checklist ${done}/${tot} — behind schedule`,on:`editCommission('${c.id}')`});}
     if((c.stage==='in_progress'||c.stage==='review'||c.stage==='delivered')&&(!c.sow||c.sow==='none'))rows.push({sev:'warn',grp:'Paperwork',t:`No SOW issued — <b>${esc(c.title)}</b> · ${esc(nm)}`,on:`editCommission('${c.id}')`});
@@ -881,7 +884,7 @@ function actionRows(){const today=todayStr();const since=d=>Math.floor((new Date
   state.clients.forEach(cl=>{const hasWork=state.commissions.some(c=>c.clientId===cl.id&&c.stage!=='inbox');if(hasWork&&cl.msa!=='signed')rows.push({sev:'warn',grp:'Paperwork',t:`MSA not signed — <b>${esc(clientName(cl))}</b> (${cl.msa||'none'})`,on:`editClient('${cl.id}')`});});
   (state.agreements||[]).forEach(a=>{if(a.status==='draft'||a.status==='sent'){const dd=since(a.date);if(dd>=5)rows.push({sev:dd>=10?'bad':'warn',grp:'Agreements stalling',t:`${esc(a.type)} still <b>${a.status}</b> after ${dd} days — ${esc(a.title)}`,on:`setTab('Agreements')`});}});
   return rows;}
-function renderActionCenter(){const rows=actionRows();const cats=[['Overdue','bad'],['Server sync','bad'],['Backups','bad'],['Money to collect','warn'],['Retainers','warn'],['At risk','warn'],['Quotes going stale','warn'],['Agreements stalling','warn'],['Extra revisions','warn'],['To quote','warn'],['Paperwork','warn']];
+function renderActionCenter(){const rows=actionRows();const cats=[['Overdue','bad'],['Server sync','bad'],['Quotes accepted','warn'],['Backups','bad'],['Money to collect','warn'],['Retainers','warn'],['At risk','warn'],['Quotes going stale','warn'],['Agreements stalling','warn'],['Extra revisions','warn'],['To quote','warn'],['Paperwork','warn']];
   const byGrp={};rows.forEach(r=>{(byGrp[r.grp]=byGrp[r.grp]||[]).push(r);});
   const present=cats.filter(([g])=>byGrp[g]&&byGrp[g].length);
   const CAP=6;const blocks=present.map(([g,sev])=>{const items=byGrp[g],shown=items.slice(0,CAP),more=items.length-shown.length;return `<div class="att-cat"><div class="att-head"><span class="act-dot ${sev}"></span>${g}<span class="att-n">${items.length}</span></div>${shown.map(r=>`<div class="act-row" onclick="${r.on}"><span class="act-dot ${r.sev}"></span><span>${r.t}</span></div>`).join('')}${more>0?`<div class="act-row" style="color:var(--muted);cursor:default"><span class="act-dot" style="background:transparent"></span><span>+${more} more…</span></div>`:''}</div>`;}).join('');
@@ -989,7 +992,7 @@ function clientRowsHTML(){const f=clientFilter.trim().toLowerCase();const statsM
   if(f)list=list.filter(c=>(clientName(c)+' '+(c.orgName||'')+' '+(c.org||'')+' '+(c.email||'')+' '+(c.handle||'')).toLowerCase().includes(f));
   if(!list.length)return `<div class="empty-state">No clients match “${esc(clientFilter)}”.</div>`;
   return `<table><thead><tr><th>Client</th><th>Organisation</th><th>Email</th><th>Jobs</th><th>Lifetime paid</th><th>In pipeline</th><th>Last contact</th><th>MSA</th><th></th></tr></thead><tbody>${list.map(c=>{const s=statsMap[c.id];const pipeline=s.value-s.paid;const repeat=s.jobs>=2;const vip=s.paid>=(state.settings.vipThreshold||500);const lc=c.lastContact?daysSince(c.lastContact):null;
-    return `<tr class="clickable" onclick="editClient('${c.id}')"><td><b>${esc(clientName(c))}</b> ${vip?'<span class="badge vip">VIP</span>':repeat?'<span class="badge repeat">repeat</span>':''}<div class="mini">${esc(c.handle||'')}${c.discord?(c.handle?' · ':'')+'⌨ '+esc(c.discord):''}</div></td><td>${esc(c.orgName||'—')}<div class="mini">${esc(c.org||'')}</div></td><td class="mini">${esc(c.email||'—')}</td><td class="num">${s.jobs}</td><td class="num">${fmtGraw(Math.round(s.paid))} <span class="usd-sub">net</span></td><td class="num">${pipeline>0?fmtGraw(Math.round(pipeline)):'—'}</td><td class="mini" style="white-space:nowrap;color:${lc!=null&&lc>14?'var(--warn)':'var(--muted)'}">${lc==null?'—':lc===0?'today':lc+'d ago'}</td><td>${statusBadge(c.msa)}</td><td onclick="event.stopPropagation()" style="white-space:nowrap"><button class="ghost sm" onclick="showTimeline('${c.id}')" title="full history with this client">History</button> <button class="doc sm" onclick="generateMSAFor('${c.id}')">MSA</button></td></tr>`;}).join('')}</tbody></table>`;}
+    return `<tr class="clickable" onclick="editClient('${c.id}')"><td><b>${esc(clientName(c))}</b> ${vip?'<span class="badge vip">VIP</span>':repeat?'<span class="badge repeat">repeat</span>':''}<div class="mini">${esc(c.handle||'')}${c.discord?(c.handle?' · ':'')+'⌨ '+esc(c.discord):''}</div></td><td>${esc(c.orgName||'—')}<div class="mini">${esc(c.org||'')}</div></td><td class="mini">${esc(c.email||'—')}</td><td class="num">${s.jobs}</td><td class="num">${fmtGraw(Math.round(s.paid))} <span class="usd-sub">net</span></td><td class="num">${pipeline>0?fmtGraw(Math.round(pipeline)):'—'}</td><td class="mini" style="white-space:nowrap;color:${lc!=null&&lc>14?'var(--warn)':'var(--muted)'}">${lc==null?'—':lc===0?'today':lc+'d ago'}</td><td>${statusBadge(c.msa)}</td><td onclick="event.stopPropagation()" style="white-space:nowrap"><button class="ghost sm" onclick="showTimeline('${c.id}')" title="full history with this client">History</button>${srvCfg.on?` <button class="ghost sm" onclick="clientPortalLink('${c.id}')" title="client status link (server mode)">Portal</button>`:''} <button class="doc sm" onclick="generateMSAFor('${c.id}')">MSA</button></td></tr>`;}).join('')}</tbody></table>`;}
 function mountClients(){const el=document.getElementById('clientRows');if(el)el.innerHTML=clientRowsHTML();}
 /* client timeline */
 function showTimeline(id){const cl=clientById(id);if(!cl)return;const ev=[];
@@ -1411,11 +1414,11 @@ function cPreviewGbp(){const m=modalMethod();let val=0,note='';
 function renderChecklistEditor(list){const el=document.getElementById('f_checklist');if(!el)return;el.innerHTML=(list||[]).map(s=>`<label style="display:flex;align-items:center;gap:8px;padding:3px 2px;font-size:13px"><input type="checkbox" ${s.done?'checked':''} style="width:auto" onchange="updChecklistProg()"><span>${esc(s.label)}</span></label>`).join('');updChecklistProg();}
 function readChecklist(){return [...document.querySelectorAll('#f_checklist label')].map(l=>({label:l.querySelector('span').textContent,done:l.querySelector('input').checked}));}
 function updChecklistProg(){const cbs=[...document.querySelectorAll('#f_checklist input')];const el=document.getElementById('clProg');if(el)el.textContent=cbs.length?cbs.filter(c=>c.checked).length+' / '+cbs.length+' done':'';}
-function openCommission(){document.getElementById('cTitle').textContent='New commission';['cDelete','cDupBtn','cSowBtn','cInvBtn','cDelBtn'].forEach(i=>document.getElementById(i).style.display='none');
+function openCommission(){document.getElementById('cTitle').textContent='New commission';['cDelete','cHistBtn','cDupBtn','cSowBtn','cInvBtn','cDelBtn'].forEach(i=>document.getElementById(i).style.display='none');
   ['f_id','f_title','f_robux','f_gbp','f_deadline','f_notes','f_scope','f_hours','f_lostReason'].forEach(i=>document.getElementById(i).value='');
   document.getElementById('f_service').value='3D asset';document.getElementById('f_type').value='Standard';document.getElementById('f_method').value='robux';document.getElementById('f_stage').value='inbox';document.getElementById('f_priority').value='normal';document.getElementById('f_source').value='Discord';document.getElementById('f_source_mode').value='none';document.getElementById('f_rig_mode').value='none';document.getElementById('f_revInc').value='2';document.getElementById('f_revUsed').value='0';document.getElementById('f_sow').value='none';
   toggleMethod();populateClientSelect();coSel=[];renderCoChips();renderMilestoneEditor((state.settings.defaultMilestones||[]).map(m=>({label:m.label,pct:m.pct,status:'pending',paidMonth:''})));renderChecklistEditor(defaultChecklist());updRevUsage();document.getElementById('cGbpPreview').textContent='';document.getElementById('cOverlay').classList.add('show');}
-function editCommission(id){const c=state.commissions.find(x=>x.id===id);if(!c)return;document.getElementById('cTitle').textContent='Edit commission';['cDelete','cDupBtn','cSowBtn','cInvBtn','cDelBtn'].forEach(i=>document.getElementById(i).style.display='inline-block');
+function editCommission(id){const c=state.commissions.find(x=>x.id===id);if(!c)return;document.getElementById('cTitle').textContent='Edit commission';['cDelete','cHistBtn','cDupBtn','cSowBtn','cInvBtn','cDelBtn'].forEach(i=>document.getElementById(i).style.display='inline-block');
   const g=(k,v)=>document.getElementById(k).value=v??'';populateClientSelect(c.clientId);
   g('f_id',c.id);g('f_title',c.title);g('f_service',c.service||'3D asset');g('f_type',c.type||'Standard');g('f_method',c.payMethod||'robux');g('f_robux',c.robux);g('f_gbp',c.gbpAmount);g('f_deadline',c.deadline);g('f_stage',c.stage||'inbox');g('f_priority',c.priority||'normal');g('f_source',c.source||'Discord');g('f_source_mode',c.sourceMode||'none');g('f_rig_mode',c.rigMode||'none');g('f_revInc',c.revInc);g('f_revUsed',c.revUsed||0);g('f_sow',c.sow||'none');g('f_scope',c.scope);g('f_notes',c.notes);g('f_hours',c.hoursLogged||'');g('f_lostReason',c.lostReason||'');
   toggleMethod();coSel=(c.coClients||[]).slice();renderCoChips();renderMilestoneEditor(c.milestones&&c.milestones.length?c.milestones:defaultMS());renderChecklistEditor(c.checklist&&c.checklist.length?c.checklist:defaultChecklist());updRevUsage();cPreviewGbp();document.getElementById('cOverlay').classList.add('show');}
@@ -1730,7 +1733,9 @@ function serverSectionHTML(){return `<div class="tg-h" style="margin-top:16px">S
     <button class="ghost sm" onclick="testServer()">Test connection</button>
     ${srvCfg.on?`<button class="danger sm" onclick="disableServerMode()">Turn off server mode</button><button class="ghost sm" onclick="pushAllToServer()" title="re-uploads every record — use after restoring a backup locally">Push everything to server</button>`:`<button class="primary sm" onclick="enableServerMode()">Enable server mode</button>`}
   </div>
-  <p class="mini" style="margin-top:8px">Enabling makes the server the source of truth: this device loads from it on open and writes every change back (row-level, batched). Local storage becomes an offline cache, and the same URL + token on another device gives you real multi-device access. The token is stored only on this device — never in backups. Note: the server stores records readably (so a client portal can be built on it later); protect it with HTTPS and keep the token secret.</p>`;}
+  <p class="mini" style="margin-top:8px">Enabling makes the server the source of truth: this device loads from it on open and writes every change back (row-level, batched), and other devices refresh live as it changes. Local storage becomes an offline cache. The token is stored only on this device — never in backups. Protect the server with HTTPS and keep the token secret.</p>
+  ${srvCfg.on&&srvStatus!=='auth'?`<div class="tg-h" style="margin-top:16px">Discord tandem <span class="mini" style="text-transform:none;letter-spacing:0">— daily brief + quote-acceptance pings</span></div><div id="srvDiscordBox"><p class="mini">Loading…</p></div>
+  <div class="tg-h" style="margin-top:16px">Server backups <span class="mini" style="text-transform:none;letter-spacing:0">— automatic nightly snapshots on the server</span></div><div id="srvBackupBox"><p class="mini">Loading…</p></div>`:''}`;}
 async function testServer(){const url=(document.getElementById('srv_url')||{}).value||srvCfg.url;const tok=(document.getElementById('srv_token')||{}).value||srvCfg.token;
   const old={...srvCfg};srvCfg.url=url.trim();srvCfg.token=tok.trim();
   try{const h=await srvFetch('/api/health');if(!h.ok)throw new Error('health '+h.status);
@@ -1744,7 +1749,63 @@ function enableServerMode(){const url=(document.getElementById('srv_url').value|
   srvCfg={url,token:tok,on:true};srvSave();location.reload();}
 function disableServerMode(){if(!confirm('Turn off server mode? This device keeps its local copy and stops syncing; the server keeps everything it has.'))return;srvCfg.on=false;srvSave();srvStatus='off';renderTab();}
 function pushAllToServer(){if(!confirm('Re-upload every record on this device to the server (overwriting same-id rows there)?'))return;srvShadow=srvEmptyShadow();srvDirty=true;persist().then(()=>alert(srvStatus==='ok'?'Pushed.':'Queued — server currently unreachable.'));}
-function initServerRetry(){if(srvTimer)return;srvTimer=setInterval(()=>{if(srvCfg.on&&srvDirty)persist();},30000);}
+function initServerRetry(){if(srvTimer)return;srvTimer=setInterval(()=>{if(srvCfg.on&&srvDirty)persist();},30000);
+  /* live cross-device refresh: pull when the server revision advances and we have nothing queued */
+  setInterval(async()=>{try{if(!srvCfg.on||srvDirty||document.querySelector('.overlay.show'))return;
+    const h=await srvFetch('/api/health');if(!h.ok)return;const {rev}=await h.json();
+    if(srvLastRev==null){srvLastRev=rev;return;}
+    if(rev>srvLastRev){srvLastRev=rev;const r=await srvFetch('/api/state');if(!r.ok)return;const snap=await r.json();
+      const data={};SRV_KV.forEach(k=>{if(snap.kv[k]!=null)data[k]=snap.kv[k];});SRV_COLLS.forEach(c=>{data[c]=snap.collections[c]||[];});
+      state=migrate(data);srvShadow=srvSnapshot();normalizeCommissions();renderTab();}
+  }catch(e){}},30000);}
+let srvLastRev=null;
+/* Discord + backups + portal + history — server-mode extras */
+async function loadServerConfig(){try{const r=await srvFetch('/api/config');if(!r.ok)return null;return await r.json();}catch(e){return null;}}
+function mountServerExtras(){if(!srvCfg.on||srvStatus==='auth')return;
+  loadServerConfig().then(c=>{const el=document.getElementById('srvDiscordBox');if(el&&c){el.innerHTML=discordBoxHTML(c);}});
+  refreshBackupList();}
+function discordBoxHTML(c){return `<div class="row2"><div><label>Discord webhook URL <span class="mini">(channel → Integrations → Webhooks)</span></label><input id="dc_hook" placeholder="${c.discordWebhook==='set'?'•••• already set — paste to replace':'https://discord.com/api/webhooks/…'}"></div><div><label>Daily brief hour (0–23, server time)</label><input id="dc_hour" type="number" min="0" max="23" value="${c.digestHour!=null?c.digestHour:8}"></div></div>
+  <div class="row-flex" style="margin-top:8px">
+    <label class="mini" style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="dc_od" ${c.notifyOverdue?'checked':''} style="width:auto"> overdue</label>
+    <label class="mini" style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="dc_dl" ${c.notifyDeadlines?'checked':''} style="width:auto"> deadlines</label>
+    <label class="mini" style="display:flex;align-items:center;gap:6px;margin:0"><input type="checkbox" id="dc_st" ${c.notifyStale?'checked':''} style="width:auto"> stale quotes</label>
+    <button class="primary sm" onclick="saveDiscord()">Save</button>
+    <button class="ghost sm" onclick="testDiscord()">Send test</button>
+    <button class="ghost sm" onclick="sendDigestNow()">Send brief now</button>
+  </div>
+  <p class="mini" style="margin-top:6px">${c.discordWebhook==='set'?'🟢 Discord connected — a daily brief posts at hour '+c.digestHour+', plus an instant ping when a client accepts a quote.':'Paste a webhook to post daily briefs (overdue, deadlines, stale quotes) and quote-acceptance pings into your studio Discord.'}</p>`;}
+async function saveDiscord(){const body={digestHour:+document.getElementById('dc_hour').value||8,notifyOverdue:document.getElementById('dc_od').checked,notifyDeadlines:document.getElementById('dc_dl').checked,notifyStale:document.getElementById('dc_st').checked};const hook=document.getElementById('dc_hook').value.trim();if(hook)body.discordWebhook=hook;
+  const r=await srvFetch('/api/config',{method:'PUT',body:JSON.stringify(body)});alert(r.ok?'Discord settings saved.':'Save failed.');mountServerExtras();}
+async function testDiscord(){const r=await srvFetch('/api/notify/test',{method:'POST'});alert(r.ok?'Test message sent — check your Discord channel.':'Failed — is the webhook URL saved and valid?');}
+async function sendDigestNow(){const r=await srvFetch('/api/notify/digest',{method:'POST'});alert(r.ok?'Daily brief posted to Discord.':'Failed — save a webhook first.');}
+async function refreshBackupList(){const el=document.getElementById('srvBackupBox');if(!el)return;try{const r=await srvFetch('/api/backups');if(!r.ok)return;const list=await r.json();
+  el.innerHTML=`<div class="row-flex"><button class="ghost sm" onclick="makeServerBackup()">Back up server now</button>${list.length?`<button class="ghost sm" onclick="downloadServerBackup('${esc(list[0].name)}')">Download latest (${(list[0].size/1024).toFixed(0)} KB)</button>`:''}<span class="mini">${list.length} snapshot${list.length===1?'':'s'} kept on the server</span></div>`;
+}catch(e){}}
+async function makeServerBackup(){const r=await srvFetch('/api/backups',{method:'POST'});alert(r.ok?'Server snapshot created.':'Failed.');refreshBackupList();}
+async function downloadServerBackup(name){try{const r=await srvFetch('/api/backups/'+encodeURIComponent(name));if(!r.ok)throw new Error('http '+r.status);const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();}catch(e){alert('Download failed: '+(e&&e.message));}}
+/* portal link per client (server mode) */
+async function clientPortalLink(id){if(!srvCfg.on){alert('Client portal links need server mode (Settings → Server mode).');return;}
+  try{let existing=null;const list=await srvFetch('/api/portal').then(r=>r.ok?r.json():[]);existing=list.find(p=>p.clientId===id&&!p.revoked);
+    let url;if(existing){url=absPortal(existing.url);}else{const r=await srvFetch('/api/portal',{method:'POST',body:JSON.stringify({clientId:id})});if(!r.ok)throw new Error('create failed');url=absPortal((await r.json()).url);}
+    try{await navigator.clipboard.writeText(url);}catch(e){}
+    if(confirm('Client status link (copied to clipboard):\n\n'+url+'\n\nOK to open it, Cancel to just keep the copy.'))window.open(url,'_blank','noopener');
+  }catch(e){alert('Could not create portal link: '+(e&&e.message));}}
+function absPortal(u){if(/^https?:\/\//.test(u))return u;const base=srvCfg.url.replace(/\/+$/,'');if(u.startsWith('//'))return (base.split('//')[0]||'https:')+u;return base+u;}
+/* row history viewer + restore (server mode) */
+async function showHistory(coll,id){if(!srvCfg.on){alert('Version history needs server mode.');return;}
+  try{const r=await srvFetch('/api/history/'+coll+'/'+id);if(!r.ok)throw new Error('http '+r.status);const vers=await r.json();
+    if(!vers.length){alert('No earlier versions recorded yet — history builds up as you edit.');return;}
+    const rows=vers.map((v,i)=>`<tr><td class="mini" style="white-space:nowrap">${new Date(v.ts).toLocaleString('en-GB')}</td><td>${esc(v.json.title||v.json.no||v.json.label||clientName(v.json)||'(record)')}</td><td style="text-align:right"><button class="ghost sm" onclick="restoreVersion('${coll}','${id}',${i})">Restore</button></td></tr>`).join('');
+    window.__hist={coll,id,vers};
+    document.getElementById('tlTitle').innerHTML='Version history <span class="hint">'+esc(coll)+' · newest first · '+vers.length+' saved</span>';
+    document.getElementById('tlBody').innerHTML='<p class="mini">Restoring writes the chosen version back as the current record (itself captured in history first).</p><table><tbody>'+rows+'</tbody></table>';
+    document.getElementById('tlOverlay').classList.add('show');
+  }catch(e){alert('Could not load history: '+(e&&e.message));}}
+function restoreVersion(coll,id,i){const h=window.__hist;if(!h||h.coll!==coll)return;const v=h.vers[i];if(!v)return;
+  if(!confirm('Restore this version? The current record will be overwritten (and saved in history first).'))return;
+  const arr=state[coll];if(!Array.isArray(arr)){alert('Unsupported collection.');return;}
+  const idx=arr.findIndex(x=>(coll==='trash'?x.tid:x.id)===id);if(idx<0)arr.push(v.json);else arr[idx]=v.json;
+  save();closeTimeline();renderTab();alert('Restored.');}
 
 /* ---- linked backup file (work straight off the USB stick — Chrome/Edge) ---- */
 function updateLinkUI(){const el=document.getElementById('linkStatus');if(el&&activeTab==='Settings')renderTab();}
@@ -1857,7 +1918,7 @@ function setTab(t){activeTab=t;renderTabsNav();renderTab();window.scrollTo(0,0);
 function renderTab(){const showKpi=['Overview','Pipeline'].includes(activeTab);let body='';
   if(activeTab==='Overview')body=renderOverview();else if(activeTab==='Pipeline')body=renderPipeline();else if(activeTab==='Clients')body=renderClients();else if(activeTab==='Finances')body=renderFinances();else if(activeTab==='Agreements')body=renderAgreements();else if(activeTab==='Documents')body=renderDocuments();else if(activeTab==='Messages')body=renderMessages();else if(activeTab==='Settings')body=renderSettings();
   document.getElementById('view').innerHTML=(showKpi?`<div id="kpiStrip">${kpiStripHTML()}</div>`:'')+body;
-  if(activeTab==='Pipeline')mountBoard();if(activeTab==='Settings'){mountSettingMS();updateStorageQuota();}if(activeTab==='Clients')mountClients();if(activeTab==='Agreements')mountAgreements();updateCapBadge();updateAppBadge();}
+  if(activeTab==='Pipeline')mountBoard();if(activeTab==='Settings'){mountSettingMS();updateStorageQuota();mountServerExtras();}if(activeTab==='Clients')mountClients();if(activeTab==='Agreements')mountAgreements();updateCapBadge();updateAppBadge();}
 setupChartTip();boot();
 </script>
 </body>
