@@ -342,6 +342,19 @@
 <div class="chart-tip" id="chartTip"></div>
 
 <!-- Unlock screen -->
+<!-- Studio login (server mode) -->
+<div class="overlay" id="loginOverlay">
+  <div class="modal" style="width:440px">
+    <div style="text-align:center"><div class="logo" title="Robux" style="margin:0 auto 10px"><svg viewBox="0 0 44 44" width="42" height="42" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="rbxg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd869"/><stop offset="1" stop-color="#f2a017"/></linearGradient></defs><polygon points="22,3 38,12.5 38,31.5 22,41 6,31.5 6,12.5" fill="url(#rbxg2)" stroke="#d3870d" stroke-width="1.5" stroke-linejoin="round"/><text x="22" y="28.5" text-anchor="middle" font-size="15.5" font-weight="800" fill="#5c3800" font-family="Arial">R$</text></svg></div><h3>37x Engine — sign in</h3><p class="mini">Sign in with your access token to reach your studio.</p></div>
+    <div id="loginProfiles" style="margin-top:12px"></div>
+    <label style="margin-top:12px">Server URL</label><input id="login_url" placeholder="https://your-server">
+    <label>Access token</label><input type="password" id="login_token" placeholder="your operator token" onkeydown="if(event.key==='Enter')doServerLogin()">
+    <div id="loginErr" class="mini" style="color:var(--bad);margin-top:8px;min-height:16px"></div>
+    <button class="primary" style="width:100%;margin-top:6px" onclick="doServerLogin()">Sign in</button>
+    <button class="ghost sm" style="width:100%;margin-top:10px" onclick="loginUseLocal()">Use without a server (local mode)</button>
+  </div>
+</div>
+
 <div class="overlay" id="unlockOverlay">
   <div class="modal" style="width:420px;text-align:center">
     <div style="margin:0 auto 14px;font-size:30px">🔒</div>
@@ -363,8 +376,9 @@ const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
 const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.5.1',APP_BUILD='2026-07-15';
+const APP_VERSION='2.6.0',APP_BUILD='2026-07-16';
 const CHANGELOG=[
+ ['2.6.0','Business shift (part 1): studio login front door with saved profiles &amp; log-out · Limited-company tax model (Corporation Tax with marginal relief, retained-profit view) replacing sole-trader · company entity in contracts (registered name, company no., office) · resilient live FX (four fallback sources). Team roster, job assignment &amp; per-person margin land next.'],
  ['2.5.1','Cleanup after the server shift: in server mode the server owns the security model (local device encryption retired — it couldn\'t protect the server copy), USB-linked file demoted to an offline-only alternative, and the persistence hierarchy stated plainly (server → cache → export)'],
  ['2.5.0','37x scorecard (studio performance + weekly Discord post) · multi-operator accounts with roles (admin / operator / viewer) · payment reconciliation (Stripe webhook + manual) auto-marks invoices paid · stage-history tracking for cycle-time analytics'],
  ['2.4.0','Discord ticket bot: TicketTool-style button panel opens a private thread + Inbox commission · reply natively in the thread (logged to a transcript) · pipeline changes auto-post to the thread · archives on Paid · /panel /link /status commands'],
@@ -375,12 +389,19 @@ const CHANGELOG=[
  ['1.5','Light theme · Lost stage & win rate · quote validity · hours logged & £/hr · VAT threshold bar · global search · next-action nudges · backup hardening · encryption save-race fix · contract terms aligned & typeset'],
  ['1.0','Original single-file dashboard: pipeline, clients, finances, agreements, documents, messages']];
 const FX_URL='https://api.frankfurter.dev/v1/latest?from=USD&to=GBP';
+const FX_ENDPOINTS=[
+  {u:'https://api.frankfurter.app/latest?from=USD&to=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null},
+  {u:'https://api.frankfurter.dev/v1/latest?from=USD&to=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null},
+  {u:'https://api.exchangerate.host/latest?base=USD&symbols=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null},
+  {u:'https://open.er-api.com/v6/latest/USD',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:(j.time_last_update_utc||'').replace(/^\w+, /,'').slice(0,11)}:null}
+];
+async function fxTry(){for(const e of FX_ENDPOINTS){try{const r=await fetch(e.u,{cache:'no-store'});if(!r.ok)continue;const v=e.p(await r.json());if(v&&+v.r>0)return {r:+v.r,d:v.d||todayStr()};}catch(err){}}return null;}
 
 const DEFAULT_MSA=`MASTER SERVICES AGREEMENT
 
 This Master Services Agreement ("Agreement") is made on {{date.today}} between:
 
-(1) {{provider.studio}}, represented by {{provider.owner}} (email {{provider.email}}, Discord {{provider.discord}}) ("Provider"); and
+(1) {{provider.entity}}, represented by {{provider.owner}} (email {{provider.email}}, Discord {{provider.discord}}) ("Provider"); and
 (2) {{client.name}} of {{client.orgName}} ({{client.org}}), email {{client.email}}, handle {{client.handle}}, Discord {{client.discord}} ("Client").
 
 1. PURPOSE & STRUCTURE
@@ -714,7 +735,7 @@ function sampleState(){
   const ms=(a,b,c)=>[{label:'Booking deposit',pct:30,status:a.s,paidMonth:a.m||''},{label:'Draft sign-off',pct:30,status:b.s,paidMonth:b.m||''},{label:'Final delivery',pct:40,status:c.s,paidMonth:c.m||''}];
   return {
     settings:{devex:0.0038,fxUsdGbp:0.75587,fxDate:'2026-06-29',fxLive:false,sym:'£',monthlyGoalGBP:450,capacity:4,autoPruneSigned:true,txnFeePct:3.4,marketplaceFeePct:30,monthlyCosts:120,cashOnHand:0,vipThreshold:500,quoteValidDays:14,extraRevPct:10,invoiceSeq:1,lastBackup:'',archiveMonths:3,targetRateGBP:20,quotePct:{simple:-20,complex:40,addon:40,source:30,rush:50},forecastProb:{quoted:40,in_progress:75,review:90,delivered:98},
-      tax:{personalAllowance:12570,paTaperOver:100000,basicRateLimit:37700,additionalThreshold:125140,basicRate:20,higherRate:40,additionalRate:45,niLowerLimit:12570,niUpperLimit:50270,niMainRate:6,niUpperRate:2,vatThreshold:90000},
+      tax:{ctSmallRate:19,ctMainRate:25,ctLowerLimit:50000,ctUpperLimit:250000,ctMarginalFrac:1.5,personalAllowance:12570,paTaperOver:100000,basicRateLimit:37700,additionalThreshold:125140,basicRate:20,higherRate:40,additionalRate:45,niLowerLimit:12570,niUpperLimit:50270,niMainRate:6,niUpperRate:2,vatThreshold:90000},
       defaultMilestones:[{label:'Booking deposit',pct:30},{label:'Draft sign-off',pct:30},{label:'Final delivery',pct:40}],
       studioName:'Example Studio',ownerName:'',ownerEmail:'',ownerDiscord:'',bizAddress:'',companyNo:'',vatReg:false,vatNo:'',vatRate:20,law:'England & Wales',invoiceTermsDays:7,invoiceTerms:'Please send payment within {days} days of receiving this invoice. Overdue amounts may accrue interest at the applicable statutory rate under the Late Payment of Commercial Debts (Interest) Act 1998, plus a discretionary late fee accruing every 2 days while unpaid. Chargebacks raised without contacting us first are a breach of the agreement; ownership of deliverables reverts until payment is resolved.',accName:'',sortCode:'',accNo:'',paypal:'',payInstructions:'Robux / gamepass: payment link provided on request.',docStyle:{font:'serif',accent:'#1f2a44',fontSize:15,margin:40,align:'left',showStudioName:true,logo:'',logoSize:56,signature:''}},
     templates:{msa:DEFAULT_MSA,sow:DEFAULT_SOW,invoice:DEFAULT_INVOICE,delivery:DEFAULT_DELIVERY},
@@ -813,8 +834,8 @@ function paidByMonth(){const map={};state.commissions.forEach(c=>{const v=jobVal
 
 /* FX */
 function updateFxBadge(){const s=state.settings;const el=document.getElementById('fxBadge');if(!el)return;const dt=s.fxDate?new Date(s.fxDate).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'';el.innerHTML=`USD→GBP <b>${s.fxUsdGbp.toFixed(4)}</b> · ${s.fxLive?'live · ECB rate of '+dt:'manual '+dt} · R$ net ${s.sym}${(s.devex*s.fxUsdGbp).toFixed(5)}`;el.title=s.fxLive?'Fetched live on open. The ECB publishes reference rates on working days (~4pm CET) — on weekends and Mondays before publication, the newest official rate is the previous working day’s.':'Rate entered manually in Settings.';}
-function fetchFX(){fetch(FX_URL).then(r=>r.json()).then(j=>{if(j&&j.rates&&j.rates.GBP){state.settings.fxUsdGbp=j.rates.GBP;state.settings.fxDate=j.date;state.settings.fxLive=true;save();updateFxBadge();renderTab();}}).catch(()=>{state.settings.fxLive=false;updateFxBadge();});}
-function refreshFXManual(){fetch(FX_URL).then(r=>r.json()).then(j=>{if(j&&j.rates&&j.rates.GBP){state.settings.fxUsdGbp=j.rates.GBP;state.settings.fxDate=j.date;state.settings.fxLive=true;save();updateFxBadge();renderTab();alert('Live rate updated: USD→GBP '+j.rates.GBP+' ('+j.date+').');}else throw 0;}).catch(()=>{alert('Could not fetch the live rate.\n\nThis usually means the dashboard is opened as a local file — browsers block internet requests from file pages for security. Type the current USD→GBP rate into the box and click Save settings. You can find it by searching \"USD to GBP\".');});}
+function fetchFX(){fxTry().then(v=>{if(v){state.settings.fxUsdGbp=v.r;state.settings.fxDate=v.d;state.settings.fxLive=true;save();updateFxBadge();renderTab();}else{state.settings.fxLive=false;updateFxBadge();}});}
+function refreshFXManual(){fxTry().then(v=>{if(v){state.settings.fxUsdGbp=v.r;state.settings.fxDate=v.d;state.settings.fxLive=true;save();updateFxBadge();renderTab();alert('Live rate updated: USD→GBP '+v.r.toFixed(4)+' ('+v.d+').');}else{alert('Could not fetch a live rate from any source right now.\n\nOn a local file (file://) browsers block these requests — the hosted/localhost app doesn\'t have that limit. If it\'s failing there too, a rate provider may be down; type today\'s USD→GBP rate into the box and Save settings as a fallback.');}});}
 
 function clientStats(id){const cs=state.commissions.filter(c=>c.clientId===id);return {jobs:cs.length,value:cs.reduce((s,c)=>s+jobValueGbp(c),0),paid:cs.reduce((s,c)=>s+paidGbp(c),0),last:cs.reduce((m,c)=>(c.deadline||'')>m?(c.deadline||''):m,'')};}
 
@@ -944,6 +965,12 @@ function incomeChartCard(){const months=monthsList(incomeRange);const labels=mon
     ${chart}<div class="chart-x">${labels.map(l=>`<span>${l}</span>`).join('')}</div>${legend}
     <p class="mini" style="margin-top:12px;text-align:center">Total <b>${fmtGraw(Math.round(total))}</b> · avg <b>${fmtGraw(Math.round(avg))}</b>/mo · best <b>${fmtGraw(Math.round(best))}</b> <span style="opacity:.55">over ${incomeRange} months</span></p></section>`;}
 function taxYearBounds(){const now=new Date();const sy=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;return {start:sy+'-04',end:(sy+1)+'-03',dStart:sy+'-04-06',dEnd:(sy+1)+'-04-05',label:sy+'/'+((sy+1)+'').slice(2)};}
+/* UK Corporation Tax on company profit (small-profits rate, marginal relief, main rate) */
+function computeCT(profit){const t=state.settings.tax||{};const small=(t.ctSmallRate!=null?t.ctSmallRate:19)/100,main=(t.ctMainRate!=null?t.ctMainRate:25)/100,lower=t.ctLowerLimit||50000,upper=t.ctUpperLimit||250000,frac=(t.ctMarginalFrac!=null?t.ctMarginalFrac:1.5)/100;
+  if(profit<=0)return {ct:0,rate:0};
+  if(profit<=lower)return {ct:profit*small,rate:small*100};
+  if(profit>=upper)return {ct:profit*main,rate:main*100};
+  const ct=Math.max(0,profit*main-(upper-profit)*frac);return {ct,rate:profit>0?ct/profit*100:0};}
 function computeTax(profit){const t=state.settings.tax;if(!t||profit<=0)return {incomeTax:0,ni:0,total:0};
   let pa=t.personalAllowance;if(t.paTaperOver>0&&profit>t.paTaperOver)pa=Math.max(0,pa-(profit-t.paTaperOver)/2);
   const ti=Math.max(0,profit-pa),addTaxable=Math.max(0,t.additionalThreshold-pa);
@@ -956,19 +983,19 @@ function computeTax(profit){const t=state.settings.tax;if(!t||profit<=0)return {
 function taxCard(){const b=taxYearBounds();const map=paidByMonth();const t=state.settings.tax||{};
   const income=Object.entries(map).filter(([k])=>k>=b.start&&k<=b.end).reduce((s,[,v])=>s+v,0);
   const expenses=state.expenses.filter(e=>e.date>=b.dStart&&e.date<=b.dEnd).reduce((s,e)=>s+(+e.amount||0),0);
-  const profit=Math.max(0,income-expenses),tax=computeTax(profit),eff=income>0?Math.round(tax.total/income*100):0,keep=income-tax.total;
+  const profit=Math.max(0,income-expenses),ct=computeCT(profit),retained=income-expenses-ct.ct;
   const last12=monthsList(12).reduce((s,m)=>s+(map[m.key]||0),0),vt=t.vatThreshold||90000;
   const vpct=vt>0?Math.min(100,Math.round(last12/vt*100)):0;const vcol=vpct>=100?'var(--bad)':vpct>=80?'var(--warn)':'var(--accent-2)';
   const vat=`<div style="margin-top:12px"><div class="mini" style="display:flex;justify-content:space-between"><span>VAT registration threshold <span style="opacity:.7">(rolling 12-month turnover)</span></span><span>${fmtGraw(Math.round(last12))} of ${fmtGraw(vt)} · ${vpct}%</span></div><div style="height:6px;background:var(--panel-2);border-radius:4px;margin-top:5px;overflow:hidden"><div style="height:100%;width:${Math.max(vpct,2)}%;background:${vcol};transition:.3s"></div></div>${vpct>=80?`<p class="mini" style="color:${vcol};margin-top:5px">⚠ ${vpct>=100?'You appear to have crossed the threshold — register for VAT now.':'Nearing the threshold — monitor monthly and register before you cross.'}</p>`:''}</div>`;
-  return `<section class="card"><h2>Tax &amp; take-home <span class="hint">UK tax year ${b.label} · estimate</span></h2>
+  return `<section class="card"><h2>Corporation Tax &amp; retained profit <span class="hint">financial year ${b.label} · estimate</span></h2>
     <div class="inc-stats" style="grid-template-columns:repeat(4,1fr);margin-top:0;border-top:none;padding-top:0">
-      <div><span class="is-l">Income (tax year)</span><span class="is-v">${fmtGraw(Math.round(income))}</span></div>
+      <div><span class="is-l">Revenue (year)</span><span class="is-v">${fmtGraw(Math.round(income))}</span></div>
       <div><span class="is-l">Allowable expenses</span><span class="is-v">${fmtGraw(Math.round(expenses))}</span></div>
-      <div><span class="is-l">Estimated tax</span><span class="is-v" style="color:var(--warn)">${fmtGraw(Math.round(tax.total))}</span></div>
-      <div><span class="is-l">Keep after tax</span><span class="is-v" style="color:var(--good)">${fmtGraw(Math.round(keep))}</span></div>
+      <div><span class="is-l">Corporation Tax</span><span class="is-v" style="color:var(--warn)">${fmtGraw(Math.round(ct.ct))}</span></div>
+      <div><span class="is-l">Retained profit</span><span class="is-v" style="color:var(--good)">${fmtGraw(Math.round(retained))}</span></div>
     </div>${vat}
-    <div class="row-flex" style="margin-top:12px"><button class="doc sm" onclick="generateTaxSummary()">Export tax-year summary</button></div>
-    <p class="mini" style="margin-top:10px">Taxable profit ${fmtGraw(Math.round(profit))} · effective rate ${eff}% · Income Tax ${fmtGraw(Math.round(tax.incomeTax))} + Class 4 NI ${fmtGraw(Math.round(tax.ni))}. Set aside the “Estimated tax” figure (income is month-based). <b>Estimate only — not tax advice.</b> Edit the rates in Settings → UK tax rules.</p></section>`;}
+    <div class="row-flex" style="margin-top:12px"><button class="doc sm" onclick="generateTaxSummary()">Export year summary</button></div>
+    <p class="mini" style="margin-top:10px">Taxable profit ${fmtGraw(Math.round(profit))} (revenue − allowable expenses) · Corporation Tax at an effective <b>${ct.rate.toFixed(1)}%</b>. Set the CT aside; retained profit funds salaries, dividends and reserves. Team payouts will reduce taxable profit once you add the team (next). <b>Estimate only — not tax/accounting advice; your accounting period may differ from the year shown.</b> Edit rates in Settings → UK tax rules.</p></section>`;}
 function updateCapBadge(){const el=document.getElementById('capBadge');if(!el)return;const cap=state.settings.capacity||0;const active=state.commissions.filter(c=>c.stage==='in_progress'||c.stage==='review').length;const ratio=cap>0?active/cap:0;const col=cap<=0?'var(--muted)':ratio>=1?'var(--bad)':ratio>=0.75?'var(--warn)':'var(--good)';const status=cap<=0?'no cap set':ratio>=1?'at capacity':ratio>=0.75?'filling up':'open';el.innerHTML=`<span class="capdot" style="background:${col}"></span>Capacity <b>${cap?active+'/'+cap:'—'}</b> <span style="color:${col}">· ${status}</span>`;}
 function forecastProb(){const d={quoted:40,in_progress:75,review:90,delivered:98};const s=state.settings.forecastProb||{};const o={};['quoted','in_progress','review','delivered'].forEach(k=>{o[k]=(s[k]==null?d[k]:+s[k])/100;});return o;}
 function forecastData(){const prob=forecastProb();let outstanding=0,weighted=0;const byStage={};state.commissions.forEach(c=>{const p=prob[c.stage];if(p!==undefined){const rem=jobValueGbp(c)-paidGbp(c);if(rem>0){outstanding+=rem;weighted+=rem*p;byStage[c.stage]=(byStage[c.stage]||0)+rem;}}});return {outstanding,weighted,byStage,prob};}
@@ -977,17 +1004,16 @@ function forecastCard(){const f=forecastData();const order=[['quoted','Quoted'],
   const won=state.commissions.filter(c=>['in_progress','review','delivered','paid'].includes(c.stage)).length,lost=state.commissions.filter(c=>c.stage==='lost').length,wr=(won+lost)?Math.round(won/(won+lost)*100):null;
   return `<section class="card"><h2>Pipeline forecast <span class="hint">likely income from active jobs</span></h2><div class="inc-stats" style="margin-top:0;border-top:none;padding-top:0;grid-template-columns:repeat(3,1fr)"><div><span class="is-l">Contracted (unpaid)</span><span class="is-v">${fmtGraw(Math.round(f.outstanding))}</span></div><div><span class="is-l">Weighted estimate</span><span class="is-v" style="color:var(--accent-2)">${fmtGraw(Math.round(f.weighted))}</span></div><div><span class="is-l">Win rate</span><span class="is-v">${wr==null?'—':wr+'%'}</span><span class="mini" style="display:block">${won} won · ${lost} lost</span></div></div>${rows?`<div style="margin-top:14px">${rows}</div>`:'<div class="empty-state">No active pipeline yet.</div>'}<p class="mini" style="margin-top:10px"><b>How this works.</b> <b>Contracted (unpaid)</b> is every unpaid milestone on your active jobs, already converted to <b>net GBP after DevEx</b> (Robux × DevEx × FX). But not all of it lands — a job you've only <i>quoted</i> can fall through, while one you've <i>delivered</i> is almost sure to pay. So each stage's total is multiplied by a <b>confidence %</b> (shown per row), and those add up to the <b>weighted estimate</b> — a realistic “what I'll probably actually bank”. Inbox inquiries are excluded; edit the confidence %s in Settings.</p></section>`;}
 function repTable(rows){return '<table style="width:100%;border-collapse:collapse;margin:4px 0 14px">'+rows.map(([k,v])=>`<tr><td style="padding:5px 0;border-bottom:1px solid #e2e2e2">${esc(k)}</td><td style="padding:5px 0;border-bottom:1px solid #e2e2e2;text-align:right;font-weight:600">${esc(v)}</td></tr>`).join('')+'</table>';}
-function generateTaxSummary(){const b=taxYearBounds();const map=paidByMonth();const income=Object.entries(map).filter(([k])=>k>=b.start&&k<=b.end).reduce((s,[,v])=>s+v,0);const expenses=state.expenses.filter(e=>e.date>=b.dStart&&e.date<=b.dEnd).reduce((s,e)=>s+(+e.amount||0),0);const profit=Math.max(0,income-expenses),tax=computeTax(profit);const sy=+b.start.slice(0,4);
+function generateTaxSummary(){const b=taxYearBounds();const map=paidByMonth();const income=Object.entries(map).filter(([k])=>k>=b.start&&k<=b.end).reduce((s,[,v])=>s+v,0);const expenses=state.expenses.filter(e=>e.date>=b.dStart&&e.date<=b.dEnd).reduce((s,e)=>s+(+e.amount||0),0);const profit=Math.max(0,income-expenses),ct=computeCT(profit);const sy=+b.start.slice(0,4);
   const tyRows=[];for(let i=0;i<12;i++){const dt=new Date(sy,3+i,1);tyRows.push([dt.toLocaleString('en',{month:'short',year:'2-digit'}),fmtGraw(Math.round(map[thisMonthKey(dt)]||0))]);}
   const byService={},byMethod={},byClient={};state.commissions.forEach(c=>{(c.milestones||[]).forEach(m=>{if(m.status==='paid'&&m.paidMonth>=b.start&&m.paidMonth<=b.end){const v=jobValueGbp(c)*(+m.pct||0)/100;byService[c.type]=(byService[c.type]||0)+v;const me=isGbp(c)?'GBP (direct)':isGamepass(c)?'Gamepass':'Robux';byMethod[me]=(byMethod[me]||0)+v;const cl=clientById(c.clientId),nm=cl?clientName(cl):'(no client)';byClient[nm]=(byClient[nm]||0)+v;}});});
   const top=(o,n)=>Object.entries(o).sort((a,b2)=>b2[1]-a[1]).slice(0,n||99).map(([k,v])=>[k,fmtGraw(Math.round(v))]);
-  const html=`<h3>Tax-year summary — ${b.label}</h3><div>Period: 6 Apr ${sy} to 5 Apr ${sy+1}. Prepared ${new Date().toLocaleDateString('en-GB')}.</div><h3>Summary</h3>${repTable([['Income (paid)',fmtGraw(Math.round(income))],['Allowable expenses',fmtGraw(Math.round(expenses))],['Taxable profit',fmtGraw(Math.round(profit))],['Estimated Income Tax',fmtGraw(Math.round(tax.incomeTax))],['Estimated Class 4 NI',fmtGraw(Math.round(tax.ni))],['Estimated total tax',fmtGraw(Math.round(tax.total))],['Estimated take-home',fmtGraw(Math.round(income-tax.total))]])}<h3>Income by month</h3>${repTable(tyRows)}<h3>Income by service</h3>${Object.keys(byService).length?repTable(top(byService)):'<div>None recorded.</div>'}<h3>Income by payment method</h3>${Object.keys(byMethod).length?repTable(top(byMethod)):'<div>None recorded.</div>'}<h3>Top clients</h3>${Object.keys(byClient).length?repTable(top(byClient,8)):'<div>None recorded.</div>'}<div style="margin-top:18px;font-size:.9em;color:#555">Estimate only — not tax advice. Income is recorded at monthly granularity, so the 6 April cut-off is approximate. Confirm figures with an accountant for self-assessment.</div>`;
-  openDoc('Tax-year summary '+b.label,html);}
+  const html=`<h3>Company year summary — ${b.label}</h3><div>${esc(state.settings.studioName||'')}${state.settings.companyNo?' · company no. '+esc(state.settings.companyNo):''}. Prepared ${new Date().toLocaleDateString('en-GB')}.</div><h3>Profit &amp; Corporation Tax</h3>${repTable([['Revenue (paid)',fmtGraw(Math.round(income))],['Allowable expenses',fmtGraw(Math.round(expenses))],['Taxable profit',fmtGraw(Math.round(profit))],['Corporation Tax (est.)',fmtGraw(Math.round(ct.ct))],['Effective CT rate',ct.rate.toFixed(1)+'%'],['Retained profit',fmtGraw(Math.round(income-expenses-ct.ct))]])}<h3>Revenue by month</h3>${repTable(tyRows)}<h3>Revenue by service</h3>${Object.keys(byService).length?repTable(top(byService)):'<div>None recorded.</div>'}<h3>Revenue by payment method</h3>${Object.keys(byMethod).length?repTable(top(byMethod)):'<div>None recorded.</div>'}<h3>Top clients</h3>${Object.keys(byClient).length?repTable(top(byClient,8)):'<div>None recorded.</div>'}<div style="margin-top:18px;font-size:.9em;color:#555">Estimate only — not tax/accounting advice. Revenue is recorded at monthly granularity and the year shown may not match your company's accounting period. Team payouts are not yet deducted. Confirm figures with your accountant.</div>`;
+  openDoc('Company year summary '+b.label,html);}
 function taxField(lab,key,step){return `<div><label>${lab}</label><input type="number" step="${step||1}" value="${(state.settings.tax||{})[key]}" onchange="state.settings.tax['${key}']=+this.value||0;save();renderTab()"></div>`;}
-function taxRulesCard(){const grid='display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px';return `<section class="card" style="margin-top:16px"><h2>UK tax rules <span class="hint">edit when the law changes</span></h2>
-  <p class="mini" style="margin-bottom:10px">The Tax &amp; take-home estimate uses these figures. Defaults are 2025/26 (England, Wales &amp; NI). Update them whenever HMRC changes a rate or threshold.</p>
-  <div class="tg-h">Income Tax</div><div style="${grid}">${taxField('Personal allowance (£)','personalAllowance')}${taxField('Allowance taper over (£)','paTaperOver')}${taxField('Basic-rate band (£ taxable)','basicRateLimit')}${taxField('Additional-rate threshold (£)','additionalThreshold')}${taxField('Basic rate (%)','basicRate',0.1)}${taxField('Higher rate (%)','higherRate',0.1)}${taxField('Additional rate (%)','additionalRate',0.1)}</div>
-  <div class="tg-h" style="margin-top:14px">National Insurance (Class 4)</div><div style="${grid}">${taxField('Lower profits limit (£)','niLowerLimit')}${taxField('Upper profits limit (£)','niUpperLimit')}${taxField('Main rate (%)','niMainRate',0.1)}${taxField('Upper rate (%)','niUpperRate',0.1)}</div>
+function taxRulesCard(){const grid='display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px';return `<section class="card" style="margin-top:16px"><h2>UK company tax rules <span class="hint">edit when the law changes</span></h2>
+  <p class="mini" style="margin-bottom:10px">The Corporation Tax estimate uses these figures. Defaults are the 2025/26 UK rates: 19% small-profits rate up to £50k, 25% main rate over £250k, with marginal relief (3/200) between. Update whenever HMRC changes a rate or threshold.</p>
+  <div class="tg-h">Corporation Tax</div><div style="${grid}">${taxField('Small-profits rate (%)','ctSmallRate',0.1)}${taxField('Main rate (%)','ctMainRate',0.1)}${taxField('Lower limit (£)','ctLowerLimit')}${taxField('Upper limit (£)','ctUpperLimit')}${taxField('Marginal relief fraction (%)','ctMarginalFrac',0.001)}</div>
   <div class="tg-h" style="margin-top:14px">VAT</div><div style="${grid}">${taxField('Registration threshold (£)','vatThreshold')}</div></section>`;}
 function serviceMixCard(){const map={};let tot=0;state.commissions.forEach(c=>{const p=paidGbp(c);if(p>0){const k=c.service||'Other';const e=map[k]=map[k]||{v:0,h:0};e.v+=p;e.h+=(+c.hoursLogged||0);tot+=p;}});const rows=Object.entries(map).sort((a,b)=>b[1].v-a[1].v);
   return `<section class="card"><h2>Earnings by service <span class="hint">by discipline · paid to date, net GBP · £/hr where hours are logged</span></h2>${rows.length?rows.map(([k,o])=>`<div class="hbar-row"><span class="lbl">${esc(k)}</span><div class="hbar-track"><div class="hbar-fill" style="width:${tot?o.v/tot*100:0}%"></div></div><span class="hbar-val">${fmtGraw(Math.round(o.v))}${o.h>0?`<span class="mini" style="display:block">${fmtGraw(Math.round(o.v/o.h))}/hr · ${o.h}h</span>`:''}</span></div>`).join('')+`<p class="mini" style="margin-top:10px">Log <b>Hours logged</b> on each commission to see your effective hourly rate per discipline — evidence for repricing the rate card.</p>`:`<div class="empty-state">No payments recorded yet.</div>`}</section>`;}
@@ -1150,7 +1176,7 @@ function openSavedAgreement(id){const r=(state.agreements||[]).find(x=>x.id===id
 function delAgreement(id){if(confirm('Move this agreement record to the trash? (Restorable for 30 days.)')){const a=(state.agreements||[]).find(x=>x.id===id);if(a)trashAdd('agreement',a);state.agreements=(state.agreements||[]).filter(x=>x.id!==id);save();renderTab();}}
 
 /* Documents */
-const TOKEN_GROUPS={Provider:['provider.studio','provider.owner','provider.email','provider.discord','provider.law','provider.depositPct','provider.termsDays'],Client:['client.name','client.first','client.last','client.email','client.org','client.orgName','client.orgLine','client.handle','client.discord','client.othersLine'],Job:['job.title','job.service','job.tier','job.method','job.robux','job.robuxNote','job.gbp','job.depositPct','job.milestones','job.sourceFiles','job.addon','job.deadline','job.revInc','job.revUsed','job.scope','job.notes','job.checklist'],Invoice:['inv.number','inv.date','inv.due','inv.lines','inv.subtotalNet','inv.totalDue','inv.feeNote','inv.instructions'],General:['date.today']};
+const TOKEN_GROUPS={Provider:['provider.studio','provider.entity','provider.companyNo','provider.owner','provider.email','provider.discord','provider.law','provider.depositPct','provider.termsDays'],Client:['client.name','client.first','client.last','client.email','client.org','client.orgName','client.orgLine','client.handle','client.discord','client.othersLine'],Job:['job.title','job.service','job.tier','job.method','job.robux','job.robuxNote','job.gbp','job.depositPct','job.milestones','job.sourceFiles','job.addon','job.deadline','job.revInc','job.revUsed','job.scope','job.notes','job.checklist'],Invoice:['inv.number','inv.date','inv.due','inv.lines','inv.subtotalNet','inv.totalDue','inv.feeNote','inv.instructions'],General:['date.today']};
 const TOKEN_DESC={
   'provider.studio':'Your studio / trading name (from Provider details).',
   'provider.owner':'Your full legal name.',
@@ -1210,7 +1236,7 @@ function htmlFromPlain(t){return (t||'').split('\n').map(l=>{const e=esc(l);cons
   const mKv=l.match(/^([A-Za-z][A-Za-z0-9 /&()'.’-]{1,44}):\s([\s\S]*)$/);
   if(mKv&&mKv[2])return '<div class="kv"><strong>'+esc(mKv[1])+':</strong> '+esc(mKv[2])+'</div>';
   return '<div>'+e+'</div>';}).join('');}
-const DOC_TPL_VERSION=7;
+const DOC_TPL_VERSION=8;
 function ensureHtmlTemplates(){if(!state.templates.delivery)state.templates.delivery=DEFAULT_DELIVERY;
   if((state.settings.docTplVersion||0)<DOC_TPL_VERSION){state.templates.msa=DEFAULT_MSA;state.templates.sow=DEFAULT_SOW;state.templates.delivery=DEFAULT_DELIVERY;state.templates.invoice=DEFAULT_INVOICE;state.settings.docTplVersion=DOC_TPL_VERSION;}
   ['msa','sow','invoice','delivery'].forEach(k=>{const t=state.templates[k];if(t&&t.trim().charAt(0)!=='<')state.templates[k]=htmlFromPlain(t);});}
@@ -1524,7 +1550,9 @@ function paymentInstructionsText(){const s=state.settings;const lines=[];
   if(s.paypal)lines.push('PayPal: '+s.paypal+' — any PayPal fees are added per the agreement.');
   if((s.payInstructions||'').trim())lines.push(s.payInstructions.trim());
   return lines.join('\n')||'(add your payment details in Documents → Provider details)';}
-function buildTokens(client,job,inv){const s=state.settings;const dep=(s.defaultMilestones&&s.defaultMilestones[0]?s.defaultMilestones[0].pct:30);const m={'provider.studio':s.studioName,'provider.owner':s.ownerName||'__________','provider.email':s.ownerEmail||'__________','provider.discord':s.ownerDiscord||'—','provider.law':s.law,'provider.depositPct':dep+'%','provider.termsDays':(s.invoiceTermsDays||7)+'','date.today':new Date().toLocaleDateString('en-GB')};
+function buildTokens(client,job,inv){const s=state.settings;const dep=(s.defaultMilestones&&s.defaultMilestones[0]?s.defaultMilestones[0].pct:30);const entity=s.companyNo?(s.studioName+', a company registered in '+(s.law||'England & Wales')+' (company no. '+s.companyNo+')'+(s.bizAddress?' with registered office at '+s.bizAddress.replace(/\n/g,', '):'')):(s.studioName||'__________');
+  const m={'provider.studio':s.studioName,'provider.entity':entity,'provider.companyNo':s.companyNo||'',
+    'provider.owner':s.ownerName||'__________','provider.email':s.ownerEmail||'__________','provider.discord':s.ownerDiscord||'—','provider.law':s.law,'provider.depositPct':dep+'%','provider.termsDays':(s.invoiceTermsDays||7)+'','date.today':new Date().toLocaleDateString('en-GB')};
   if(client){m['client.name']=clientName(client);m['client.first']=client.first||'';m['client.last']=client.last||'';m['client.email']=client.email||'__________';m['client.org']=client.org||'';m['client.orgName']=client.orgName||'(independent)';m['client.orgLine']=client.orgName?(' / '+client.orgName):'';m['client.handle']=client.handle||'';m['client.discord']=client.discord||'—';}
   m['client.othersLine']='';
   if(job&&Array.isArray(job.coClients)&&job.coClients.length){const others=job.coClients.map(id=>clientById(id)).filter(Boolean).map(c2=>clientName(c2)+(c2.email?' ('+c2.email+')':c2.discord?' (Discord '+c2.discord+')':''));if(others.length)m['client.othersLine']='; additional client contacts: '+others.join(', ');}
@@ -1774,7 +1802,7 @@ function mountServerExtras(){if(!srvCfg.on||srvStatus==='auth')return;
   loadServerConfig().then(c=>{const el=document.getElementById('srvDiscordBox');if(el&&c){el.innerHTML=discordBoxHTML(c);}});
   refreshBackupList();refreshScorecard();refreshWhoAndOps();}
 async function refreshWhoAndOps(){try{const r=await srvFetch('/api/me');if(!r.ok)return;srvWho=await r.json();
-  const el=document.getElementById('srvWhoBox');if(el)el.innerHTML='Signed in as <b>'+esc(srvWho.name)+'</b> · role <b>'+esc(srvWho.role)+'</b>'+(srvWho.role==='viewer'?' — <span style="color:var(--warn)">read-only</span>':'');
+  const el=document.getElementById('srvWhoBox');if(el)el.innerHTML='Signed in as <b>'+esc(srvWho.name)+'</b> · role <b>'+esc(srvWho.role)+'</b>'+(srvWho.role==='viewer'?' — <span style="color:var(--warn)">read-only</span>':'')+' <button class="ghost sm" style="margin-left:8px" onclick="serverLogout()">Log out</button>';
   if(srvWho.role==='admin'){const w=document.getElementById('srvOpsWrap');if(w){const list=await srvFetch('/api/operators').then(x=>x.ok?x.json():[]);
     w.innerHTML=`<div class="tg-h" style="margin-top:16px">Operators <span class="mini" style="text-transform:none;letter-spacing:0">— team access &amp; roles</span></div>
     <div class="tbl-scroll" style="max-height:200px"><table><tbody>${list.map(o=>`<tr><td><b>${esc(o.name)}</b>${o.you?' <span class="badge">you</span>':''}</td><td class="mini">${esc(o.role)}</td><td style="text-align:right">${o.you?'':`<button class="danger sm" onclick="revokeOperator('${esc(o.tokenTail)}')">Revoke</button>`}</td></tr>`).join('')}</tbody></table></div>
@@ -1960,7 +1988,31 @@ function initPWA(){try{
 }catch(e){}}
 function showPwaToast(){if(document.getElementById('pwaToast'))return;const el=document.createElement('div');el.id='pwaToast';el.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--txt);color:var(--bg);padding:11px 16px;border-radius:10px;z-index:70;box-shadow:0 8px 24px rgba(20,25,35,.3);font-size:13.5px';el.innerHTML='A new version of Commission Ops is ready. <button style="margin-left:8px;border:none;border-radius:7px;padding:6px 12px;cursor:pointer;background:var(--accent);color:#fff;font-weight:600" onclick="location.reload()">Refresh</button>';document.body.appendChild(el);}
 function updateAppBadge(){try{if(navigator.setAppBadge){const n=actionRows().length;if(n)navigator.setAppBadge(n);else navigator.clearAppBadge&&navigator.clearAppBadge();}}catch(e){}}
-function boot(){if(srvCfg.on&&srvCfg.url)return serverBoot();idbGet(KEY).then(v=>{if(v)return bootFrom(v);const raw=localStorage.getItem(KEY);if(raw){idbPut(KEY,raw).catch(()=>{});return bootFrom(raw);}state=defaultState();startApp();}).catch(()=>{const raw=localStorage.getItem(KEY);if(raw)return bootFrom(raw);state=defaultState();startApp();});}
+/* ---- studio login (server mode front door) ---- */
+const PKEY='commission_ops_profiles';
+function loadProfiles(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return [];}}
+function saveProfile(p){const list=loadProfiles().filter(x=>!(x.url===p.url&&x.name===p.name));list.unshift(p);if(list.length>8)list.length=8;localStorage.setItem(PKEY,JSON.stringify(list));}
+function showLogin(){const ov=document.getElementById('loginOverlay');if(!ov)return;document.getElementById('wrap').style.display='none';
+  document.getElementById('login_url').value=srvCfg.url||(loadProfiles()[0]||{}).url||'';
+  const box=document.getElementById('loginProfiles');const profs=loadProfiles();
+  box.innerHTML=profs.length?('<label>Saved profiles</label>'+profs.map((p,i)=>`<button class="ghost sm" style="width:100%;text-align:left;margin-bottom:5px" onclick="pickProfile(${i})">${esc(p.name||'Profile')} <span class="mini">· ${esc((p.url||'').replace(/^https?:\/\//,''))}</span></button>`).join('')):'';
+  ov.classList.add('show');setTimeout(()=>{const el=document.getElementById(profs.length?'login_token':'login_url');el&&el.focus();},60);}
+function hideLogin(){const ov=document.getElementById('loginOverlay');if(ov)ov.classList.remove('show');document.getElementById('wrap').style.display='';}
+function pickProfile(i){const p=loadProfiles()[i];if(!p)return;document.getElementById('login_url').value=p.url||'';document.getElementById('login_token').value=p.token||'';doServerLogin();}
+async function doServerLogin(){const url=(document.getElementById('login_url').value||'').trim().replace(/\/+$/,'');const token=(document.getElementById('login_token').value||'').trim();const err=document.getElementById('loginErr');err.textContent='';
+  if(!url||!token){err.textContent='Enter the server URL and your access token.';return;}
+  srvCfg={url,token,on:true};
+  try{const r=await srvFetch('/api/me');
+    if(r.status===401){err.textContent='That token was rejected by the server.';return;}
+    if(!r.ok){err.textContent='Server error ('+r.status+').';return;}
+    srvWho=await r.json();srvSave();saveProfile({name:srvWho.name,url,token});hideLogin();serverBoot();
+  }catch(e){err.textContent='Could not reach '+url+' — check the URL and that the server is running.';}}
+function loginUseLocal(){srvCfg.on=false;srvSave();hideLogin();location.reload();}
+function serverLogout(){if(!confirm('Sign out? This device keeps its offline cache; you\'ll sign in again to sync.'))return;srvCfg.token='';srvSave();srvWho=null;location.reload();}
+async function serverBootGate(){
+  if(srvCfg.token){try{const r=await srvFetch('/api/me');if(r.ok){srvWho=await r.json();return serverBoot();}if(r.status!==401){return serverBoot();/* network/5xx → let serverBoot try cache */}}catch(e){return serverBoot();/* unreachable → offline cache path */}}
+  showLogin();}
+function boot(){if(srvCfg.on&&srvCfg.url)return serverBootGate();idbGet(KEY).then(v=>{if(v)return bootFrom(v);const raw=localStorage.getItem(KEY);if(raw){idbPut(KEY,raw).catch(()=>{});return bootFrom(raw);}state=defaultState();startApp();}).catch(()=>{const raw=localStorage.getItem(KEY);if(raw)return bootFrom(raw);state=defaultState();startApp();});}
 function bootFrom(raw){let env=null;try{env=JSON.parse(raw);}catch(e){}loadedTs=(env&&+env.ts)||0;if(env&&env.enc===true){if(!cryptoOK()){alert('This data is encrypted but your browser cannot decrypt it here. Open in Chrome or Safari.');state=defaultState();return startApp();}currentSalt=_unb64(env.salt);pendingEnv=env;document.getElementById('wrap').style.display='none';document.getElementById('unlockOverlay').classList.add('show');setTimeout(()=>{const el=document.getElementById('unlockPass');el&&el.focus();},60);return;}state=migrate(env&&env.enc===false?env.data:env);startApp();}
 
 /* render */
