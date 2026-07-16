@@ -217,6 +217,7 @@
     <label>Project title *</label><input id="f_title" placeholder="e.g. Launch pack for QuestForge">
     <div><label>Client</label><div class="fieldrow"><div class="combo"><input type="hidden" id="f_client"><input id="f_clientSearch" placeholder="Search clients…" autocomplete="off" oninput="filterClientDropdown()" onfocus="filterClientDropdown()" onblur="setTimeout(()=>{hideClientDropdown();syncClientInput()},160)"><div class="combo-list" id="f_clientList"></div></div><button type="button" class="ghost sm" onclick="openClient()">+ New</button></div></div>
     <div><label>Additional clients <span class="mini">(optional — listed as contacts on the SOW/delivery note; billing &amp; stats stay with the primary client)</span></label><div class="combo"><input id="f_coSearch" placeholder="Add another client…" autocomplete="off" oninput="filterCoDropdown()" onfocus="filterCoDropdown()" onblur="setTimeout(hideCoDropdown,160)"><div class="combo-list" id="f_coList"></div></div><div id="f_coChips" class="row-flex" style="margin-top:7px;gap:6px"></div></div>
+    <div><label>Assigned to <span class="mini">(team members doing the work — drives cost &amp; margin)</span></label><select id="f_assignPick" onchange="pickAssignee(this.value);this.value=''"></select><div id="f_assignRows" style="margin-top:7px"></div><div id="f_marginNote" class="mini" style="margin-top:6px"></div></div>
     <div class="row2">
       <div><label>Service <span class="mini">(SOW discipline)</span></label><select id="f_service"><option>3D asset</option><option>Map / environment</option><option>Scripting</option><option>GFX / 2D art</option><option>UI / UX</option><option>Animation</option><option>Audio</option><option>Other</option></select></div>
       <div><label>Tier</label><select id="f_type"><option>Standard</option><option>Detailed</option><option>Premium</option><option>Small / add-on</option><option>Bespoke</option></select></div>
@@ -374,10 +375,11 @@ const CLOSED=s=>s==='paid'||s==='lost';
 function isArchived(c){if(!CLOSED(c.stage))return false;const m=+state.settings.archiveMonths||3;const ds=daysSince(c.stageSince||c.deadline);return ds!=null&&ds>m*30;}
 const STAGE_LABEL=Object.fromEntries(STAGES.map(s=>[s.key,s.label]));
 const PRIORITY_COLOR={high:'var(--bad)',normal:'transparent',low:'var(--muted)'};
-const TABS=['Overview','Pipeline','Clients','Finances','Agreements','Documents','Messages','Settings'];
+const TABS=['Overview','Pipeline','Clients','Team','Finances','Agreements','Documents','Messages','Settings'];
 const KEY='commission_ops_v4';
-const APP_VERSION='2.6.0',APP_BUILD='2026-07-16';
+const APP_VERSION='2.7.0',APP_BUILD='2026-07-16';
 const CHANGELOG=[
+ ['2.7.0','Business shift (part 2): a Team roster with flexible pay (revenue-share % or hourly cost) · assign people to jobs (drives cost) · per-job margin, live in the editor and on pipeline cards · Business P&L (revenue − team − overhead − Corporation Tax = retained) · team performance &amp; utilisation · Corporation Tax now nets off team payouts'],
  ['2.6.0','Business shift (part 1): studio login front door with saved profiles &amp; log-out · Limited-company tax model (Corporation Tax with marginal relief, retained-profit view) replacing sole-trader · company entity in contracts (registered name, company no., office) · resilient live FX (four fallback sources). Team roster, job assignment &amp; per-person margin land next.'],
  ['2.5.1','Cleanup after the server shift: in server mode the server owns the security model (local device encryption retired — it couldn\'t protect the server copy), USB-linked file demoted to an offline-only alternative, and the persistence hierarchy stated plainly (server → cache → export)'],
  ['2.5.0','37x scorecard (studio performance + weekly Discord post) · multi-operator accounts with roles (admin / operator / viewer) · payment reconciliation (Stripe webhook + manual) auto-marks invoices paid · stage-history tracking for cycle-time analytics'],
@@ -390,10 +392,9 @@ const CHANGELOG=[
  ['1.0','Original single-file dashboard: pipeline, clients, finances, agreements, documents, messages']];
 const FX_URL='https://api.frankfurter.dev/v1/latest?from=USD&to=GBP';
 const FX_ENDPOINTS=[
-  {u:'https://api.frankfurter.app/latest?from=USD&to=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null},
   {u:'https://api.frankfurter.dev/v1/latest?from=USD&to=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null},
-  {u:'https://api.exchangerate.host/latest?base=USD&symbols=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null},
-  {u:'https://open.er-api.com/v6/latest/USD',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:(j.time_last_update_utc||'').replace(/^\w+, /,'').slice(0,11)}:null}
+  {u:'https://open.er-api.com/v6/latest/USD',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:(j.time_last_update_utc||'').replace(/^\w+, /,'').slice(0,11)}:null},
+  {u:'https://api.frankfurter.app/latest?from=USD&to=GBP',p:j=>(j&&j.rates&&j.rates.GBP)?{r:j.rates.GBP,d:j.date}:null}
 ];
 async function fxTry(){for(const e of FX_ENDPOINTS){try{const r=await fetch(e.u,{cache:'no-store'});if(!r.ok)continue;const v=e.p(await r.json());if(v&&+v.r>0)return {r:+v.r,d:v.d||todayStr()};}catch(err){}}return null;}
 
@@ -765,14 +766,14 @@ function sampleState(){
     agreements:[{id:uid(),type:'MSA',clientId:c1,commissionId:'',title:'MSA — Aria Vance (Arcane Dev)',date:d(-7),text:'MASTER SERVICES AGREEMENT\n\n(Sample saved record. A real record captures the full generated text at the moment you save it, so you always have the exact version that was sent or signed.)',status:'signed',signedDate:d(-6),signedLink:'https://app.docusign.com/documents/sample'}]
   };
 }
-function defaultState(){const s=sampleState();s.clients=[];s.commissions=[];s.expenses=[];s.agreements=[];s.invoices=[];s.retainers=[];s.cashouts=[];s.trash=[];s.settings.studioName='';return s;}
+function defaultState(){const s=sampleState();s.clients=[];s.commissions=[];s.expenses=[];s.agreements=[];s.invoices=[];s.retainers=[];s.cashouts=[];s.trash=[];s.team=[];s.settings.studioName='';return s;}
 let state=defaultState();let activeTab='Overview';let incomeView='monthly';let incomeRange=6;
 let cryptoKey=null,currentSalt=null,encEnabled=false,pendingEnv=null,saveTimer=null;
 let loadedTs=0,linkedHandle=null,linkedName='',linkedState='none';const HKEY='commission_ops_fs_handle';
 const SKEY='commission_ops_server';
 let srvCfg=(()=>{try{return Object.assign({url:'',token:'',on:false},JSON.parse(localStorage.getItem(SKEY)||'{}'));}catch(e){return{url:'',token:'',on:false};}})();
 let srvShadow=null,srvDirty=false,srvStatus=srvCfg.on?'offline':'off',srvTimer=null;
-const SRV_COLLS=['clients','commissions','invoices','retainers','agreements','expenses','cashouts','trash'];
+const SRV_COLLS=['clients','commissions','invoices','retainers','agreements','expenses','cashouts','trash','team'];
 const SRV_KV=['settings','templates','messages','rates'];
 let clientFilter='',agrFilter='';
 
@@ -804,7 +805,7 @@ function thisMonthKey(dt){dt=dt?new Date(dt):new Date();return dt.getFullYear()+
 function todayStr(){return new Date().toISOString().slice(0,10);}
 function daysSince(d){if(!d)return null;return Math.floor((new Date(todayStr())-new Date(d))/86400000);}
 function defaultChecklist(){return ['Brief confirmed','Outline / plan','First draft','Client review','Revisions','Final QA','Delivered'].map(l=>({label:l,done:false}));}
-function normalizeCommissions(){(state.commissions||[]).forEach(c=>{if(!Array.isArray(c.checklist)||!c.checklist.length){const cl=defaultChecklist();const idx={inbox:0,quoted:1,in_progress:3,review:5,delivered:6,paid:7,lost:0}[c.stage]||0;cl.forEach((s,i)=>s.done=i<idx);c.checklist=cl;}if(!c.stageSince)c.stageSince=todayStr();if(c.revUsed==null)c.revUsed=0;if(!c.service)c.service='3D asset';if(c.stage==='quoted'&&!c.quotedAt)c.quotedAt=c.stageSince||todayStr();});if(!Array.isArray(state.invoices))state.invoices=[];if(!Array.isArray(state.retainers))state.retainers=[];if(!Array.isArray(state.cashouts))state.cashouts=[];if(!Array.isArray(state.trash))state.trash=[];}
+function normalizeCommissions(){(state.commissions||[]).forEach(c=>{if(!Array.isArray(c.checklist)||!c.checklist.length){const cl=defaultChecklist();const idx={inbox:0,quoted:1,in_progress:3,review:5,delivered:6,paid:7,lost:0}[c.stage]||0;cl.forEach((s,i)=>s.done=i<idx);c.checklist=cl;}if(!c.stageSince)c.stageSince=todayStr();if(c.revUsed==null)c.revUsed=0;if(!c.service)c.service='3D asset';if(c.stage==='quoted'&&!c.quotedAt)c.quotedAt=c.stageSince||todayStr();});if(!Array.isArray(state.invoices))state.invoices=[];if(!Array.isArray(state.retainers))state.retainers=[];if(!Array.isArray(state.cashouts))state.cashouts=[];if(!Array.isArray(state.trash))state.trash=[];if(!Array.isArray(state.team))state.team=[];(state.commissions||[]).forEach(c=>{if(!Array.isArray(c.assignees))c.assignees=[];});}
 
 function rbxToGbp(r){return (r||0)*state.settings.devex*state.settings.fxUsdGbp;}
 function fmtG(r){return state.settings.sym+rbxToGbp(r).toLocaleString(undefined,{maximumFractionDigits:0});}
@@ -812,6 +813,62 @@ function fmtGraw(v){return state.settings.sym+(v||0).toLocaleString(undefined,{m
 function fmtR(r){return 'R$ '+(r||0).toLocaleString();}
 function esc(s){return(s||'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function clientById(id){return state.clients.find(c=>c.id===id);}
+/* ---- team (people who do the work) + margin economics ---- */
+function teamById(id){return (state.team||[]).find(m=>m.id===id);}
+function teamMemberName(id){const m=teamById(id);return m?m.name:'(removed)';}
+function memberCostOnJob(m,c,hours){if(!m||m.payType==='none')return 0;if(m.payType==='share')return jobValueGbp(c)*(+m.sharePct||0)/100;if(m.payType==='hourly')return (+hours||0)*(+m.hourlyCost||0);return 0;}
+function teamCostOf(c){let cost=0;(c.assignees||[]).forEach(a=>{const m=teamById(a.id);cost+=memberCostOnJob(m,c,a.hours);});return cost;}
+function marginOf(c){return jobValueGbp(c)-teamCostOf(c);}
+function marginPct(c){const v=jobValueGbp(c);return v>0?Math.round(marginOf(c)/v*100):null;}
+function memberStats(id){let jobs=0,active=0,hours=0,payout=0,revenue=0,paidPayout=0;
+  state.commissions.forEach(c=>{const a=(c.assignees||[]).find(x=>x.id===id);if(!a)return;jobs++;if(!CLOSED(c.stage))active++;hours+=(+a.hours||0);const m=teamById(id);const cost=memberCostOnJob(m,c,a.hours);payout+=cost;revenue+=jobValueGbp(c);paidPayout+=cost*paidPct(c)/100;});
+  const m=teamById(id);const cap=m&&+m.capacity>0?+m.capacity:0;return {jobs,active,hours,payout,revenue,paidPayout,cap,util:cap?Math.round(active/cap*100):null,rate:hours>0?revenue*0+ (payout/hours):null};}
+function addTeamMember(){state.team=state.team||[];state.team.push({id:uid(),name:'New member',jobRole:'',payType:'share',sharePct:20,hourlyCost:15,capacity:3,active:true});save();renderTab();}
+function updTeam(id,k,v){const m=teamById(id);if(!m)return;m[k]=v;save();if(k==='payType'||k==='active')renderTab();else{const el=document.getElementById('teamMeta_'+id);}}
+function delTeamMember(id){if(!confirm('Remove this team member? They stay on past jobs they were assigned to (shown as removed).'))return;const m=teamById(id);if(m)trashAdd('team',m);state.team=(state.team||[]).filter(x=>x.id!==id);save();renderTab();}
+function renderTeam(){const team=state.team||[];const active=team.filter(m=>m.active!==false);
+  const totalActiveJobs=state.commissions.filter(c=>!CLOSED(c.stage)&&(c.assignees||[]).length).length;
+  const capSum=active.reduce((s,m)=>s+(+m.capacity||0),0);
+  const rows=team.map(m=>{const st=memberStats(m.id);const utilCol=st.util==null?'var(--muted)':st.util>=100?'var(--bad)':st.util>=75?'var(--warn)':'var(--good)';
+    return `<tr>
+    <td><input value="${esc(m.name)}" onchange="updTeam('${m.id}','name',this.value)" style="min-width:120px"></td>
+    <td><input value="${esc(m.jobRole||'')}" placeholder="role" onchange="updTeam('${m.id}','jobRole',this.value)" style="min-width:100px"></td>
+    <td><select onchange="updTeam('${m.id}','payType',this.value)"><option value="share"${m.payType==='share'?' selected':''}>Revenue share</option><option value="hourly"${m.payType==='hourly'?' selected':''}>Hourly cost</option><option value="none"${m.payType==='none'?' selected':''}>Not costed</option></select></td>
+    <td>${m.payType==='hourly'?`£<input type="number" min="0" step="0.5" value="${m.hourlyCost||0}" onchange="updTeam('${m.id}','hourlyCost',+this.value||0)" style="max-width:72px">/hr`:m.payType==='share'?`<input type="number" min="0" max="100" value="${m.sharePct||0}" onchange="updTeam('${m.id}','sharePct',+this.value||0)" style="max-width:60px">%`:'—'}</td>
+    <td><input type="number" min="0" value="${m.capacity||0}" onchange="updTeam('${m.id}','capacity',+this.value||0)" style="max-width:56px" title="max active jobs"></td>
+    <td class="num" style="color:${utilCol}">${st.active}${m.capacity?'/'+m.capacity:''}${st.util!=null?' · '+st.util+'%':''}</td>
+    <td class="num">${st.hours||0}h</td>
+    <td class="num">${fmtGraw(Math.round(st.payout))}<span class="usd-sub">earns</span></td>
+    <td style="text-align:right"><label class="mini" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" ${m.active!==false?'checked':''} onchange="updTeam('${m.id}','active',this.checked)" style="width:auto">active</label> <button class="danger sm" onclick="delTeamMember('${m.id}')">✕</button></td></tr>`;}).join('');
+  return `<section class="card"><h2>Team <span class="hint">${active.length} active · ${totalActiveJobs} assigned job${totalActiveJobs===1?'':'s'} in progress${capSum?' · '+totalActiveJobs+'/'+capSum+' studio capacity':''}</span></h2>
+  ${team.length?`<div class="tbl-scroll"><table><thead><tr><th>Name</th><th>Role</th><th>Pay model</th><th>Rate</th><th>Cap</th><th>Workload</th><th>Hours</th><th>Earnings</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty-state">No team yet — add the people who do the work. Each can be paid a <b>revenue share %</b> or an <b>hourly cost</b>; that flows into per-job margin.</div>`}
+  <div style="margin-top:12px"><button class="primary sm" onclick="addTeamMember()">+ Add team member</button></div>
+  <p class="mini" style="margin-top:12px">Assign people to a job in its editor (<b>Assigned to</b>). <b>Workload</b> = active assigned jobs vs each person's capacity. <b>Earnings</b> = what they're paid across their jobs (share % of job value, or hours × their rate). This is the team cost that turns revenue into <b>margin</b> — see Finances.</p></section>
+  ${teamPerfCard()}`;}
+function realizedTeamCost(){return state.commissions.reduce((s,c)=>s+teamCostOf(c)*paidPct(c)/100,0);}
+function teamCostInYear(b){let t=0;state.commissions.forEach(c=>{const v=jobValueGbp(c);if(v<=0)return;let paidY=0;(c.milestones||[]).forEach(m=>{if(m.status==='paid'&&m.paidMonth>=b.start&&m.paidMonth<=b.end)paidY+=v*(+m.pct||0)/100;});if(paidY>0)t+=teamCostOf(c)*(paidY/v);});return t;}
+function pnlCard(){const map=paidByMonth();const yr=new Date().getFullYear().toString();const revenue=Object.entries(map).filter(([k])=>k.startsWith(yr)).reduce((s,[,v])=>s+v,0);
+  const b=taxYearBounds();const teamY=teamCostInYear(b);const expY=state.expenses.filter(e=>e.date>=b.dStart&&e.date<=b.dEnd).reduce((s,e)=>s+(+e.amount||0),0);
+  const op=Math.max(0,revenue-teamY-expY);const ct=computeCT(op);const retained=revenue-teamY-expY-ct.ct;
+  const gm=revenue>0?Math.round((revenue-teamY)/revenue*100):0;
+  const row=(l,v,strong,col)=>`<tr><td${strong?' style="font-weight:700"':''}>${l}</td><td class="num" style="text-align:right${col?';color:'+col:''}${strong?';font-weight:700':''}">${v}</td></tr>`;
+  return `<section class="card"><h2>Business P&amp;L <span class="hint">this financial year · ${b.label} · estimate</span></h2>
+  <table><tbody>
+  ${row('Revenue (paid)',fmtGraw(Math.round(revenue)))}
+  ${row('− Team payouts <span class="mini">(realised on paid work)</span>',fmtGraw(Math.round(teamY)))}
+  ${row('= Gross margin <span class="mini">('+gm+'%)</span>',fmtGraw(Math.round(revenue-teamY)),true)}
+  ${row('− Overhead / expenses',fmtGraw(Math.round(expY)))}
+  ${row('= Operating profit',fmtGraw(Math.round(op)),true)}
+  ${row('− Corporation Tax <span class="mini">('+ct.rate.toFixed(1)+'%)</span>',fmtGraw(Math.round(ct.ct)),false,'var(--warn)')}
+  ${row('= Retained profit',fmtGraw(Math.round(retained)),true,'var(--good)')}
+  </tbody></table>
+  <p class="mini" style="margin-top:8px">The full picture now that you run a team: revenue less what the team earns is your <b>gross margin</b>; less overhead is operating profit; less Corporation Tax is what the company keeps. Team payouts here are the realised cost on paid work. <b>Estimate — not accounting advice.</b></p></section>`;}
+function teamPerfCard(){const team=(state.team||[]).filter(m=>m.active!==false);if(!team.length)return '';
+  const rows=team.map(m=>{const st=memberStats(m.id);return {m,st};}).sort((a,b)=>b.st.revenue-a.st.revenue);
+  const maxRev=Math.max(1,...rows.map(r=>r.st.revenue));
+  return `<section class="card" style="margin-top:16px"><h2>Team performance <span class="hint">revenue contributed &amp; utilisation</span></h2>
+  ${rows.map(({m,st})=>`<div class="hbar-row"><span class="lbl" style="width:150px;line-height:1.2">${esc(m.name)}<br><span class="mini">${st.jobs} job${st.jobs===1?'':'s'} · ${st.hours}h${st.util!=null?' · '+st.util+'% util':''}</span></span><div class="hbar-track"><div class="hbar-fill" style="width:${Math.round(st.revenue/maxRev*100)}%"></div></div><span class="hbar-val">${fmtGraw(Math.round(st.revenue))}</span></div>`).join('')}
+  <p class="mini" style="margin-top:10px">Revenue contributed = total value of the jobs each person is assigned to (a shared job counts for everyone on it). Pair with Earnings on the roster to see cost vs contribution.</p></section>`;}
 function clientName(c){if(!c)return '(no client)';const n=[c.first,c.last].filter(Boolean).join(' ');return n||c.orgName||c.handle||'(unnamed)';}
 function dueClass(d){if(!d)return'';const t=todayStr();if(d<t)return'over';return((new Date(d)-new Date(t))/86400000)<=3?'soon':'';}
 function dueLabel(d){if(!d)return'';const t=todayStr();if(d<t)return'⚠ overdue';const diff=Math.round((new Date(d)-new Date(t))/86400000);return diff===0?'due today':'due in '+diff+'d';}
@@ -868,6 +925,7 @@ function ticketHTML(c,color){const pp=paidPct(c);const cl=clientById(c.clientId)
   return `<div class="ticket" draggable="true" data-id="${c.id}" style="border-left-color:${color}" onclick="editCommission('${c.id}')">
     ${c.priority&&c.priority!=='normal'?`<span class="flag" style="background:${PRIORITY_COLOR[c.priority]}" title="${c.priority} priority"></span>`:''}
     <div class="t-title">${esc(c.title)}</div><div class="t-client">${esc(clientName(cl))}${(c.coClients&&c.coClients.length)?` <span class="pill" title="${esc(c.coClients.map(id=>clientName(clientById(id))).join(', '))}">+${c.coClients.length}</span>`:''}</div>
+    ${(c.assignees&&c.assignees.length)?`<div class="t-meta" style="margin-top:6px"><span class="mini" title="${esc(c.assignees.map(a=>teamMemberName(a.id)).join(', '))}">👤 ${c.assignees.map(a=>esc(teamMemberName(a.id).split(' ')[0])).join(', ').slice(0,28)}</span>${!CLOSED(c.stage)&&teamCostOf(c)>0?(()=>{const mp=marginPct(c);return `<span class="mini" style="color:${mp<0?'var(--bad)':mp<30?'var(--warn)':'var(--good)'}" title="margin after team cost">◧ ${mp}% margin</span>`;})():''}</div>`:''}
     <div class="t-meta">${c.service?`<span class="pill" title="service / discipline">${esc(c.service)}</span>`:''}${c.type?`<span class="pill" style="opacity:.7" title="tier">${esc(c.type)}</span>`:''}<span class="price">${priceTxt}</span></div>
     <div class="t-meta"><span class="pill">${methPill}</span>${c.quoteAcceptedAt&&c.stage==='quoted'?'<span class="pill" style="background:rgba(47,158,68,.15);color:var(--good)" title="client accepted via portal '+esc(new Date(c.quoteAcceptedAt).toLocaleDateString('en-GB'))+'">✓ accepted</span>':''}${c.retainerId?'<span class="pill" style="background:rgba(66,99,235,.13);color:var(--accent)" title="auto-created from a retainer">↻ retainer</span>':''}${c.discordThreadId?'<span class="pill" style="background:rgba(88,101,242,.16);color:#5865f2" title="linked Discord ticket thread">🎫 thread</span>':c.discordThreadReq?'<span class="pill" style="opacity:.7" title="thread requested — bot opening it">🎫 …</span>':''}${c.sow&&c.sow!=='none'?`<span class="pill sow">SOW ${c.sow}</span>`:''}<span class="mini">${subTxt}</span></div>
     ${!CLOSED(c.stage)?`<div class="pay-track"><div class="pay-fill" style="width:${pp}%"></div></div><div class="pay-label">${pp}% paid${pp<100?' · '+fmtGraw(Math.round(val*(100-pp)/100))+' outstanding':''}</div>`:''}
@@ -983,7 +1041,7 @@ function computeTax(profit){const t=state.settings.tax;if(!t||profit<=0)return {
 function taxCard(){const b=taxYearBounds();const map=paidByMonth();const t=state.settings.tax||{};
   const income=Object.entries(map).filter(([k])=>k>=b.start&&k<=b.end).reduce((s,[,v])=>s+v,0);
   const expenses=state.expenses.filter(e=>e.date>=b.dStart&&e.date<=b.dEnd).reduce((s,e)=>s+(+e.amount||0),0);
-  const profit=Math.max(0,income-expenses),ct=computeCT(profit),retained=income-expenses-ct.ct;
+  const teamY=teamCostInYear(b);const profit=Math.max(0,income-expenses-teamY),ct=computeCT(profit),retained=income-expenses-teamY-ct.ct;
   const last12=monthsList(12).reduce((s,m)=>s+(map[m.key]||0),0),vt=t.vatThreshold||90000;
   const vpct=vt>0?Math.min(100,Math.round(last12/vt*100)):0;const vcol=vpct>=100?'var(--bad)':vpct>=80?'var(--warn)':'var(--accent-2)';
   const vat=`<div style="margin-top:12px"><div class="mini" style="display:flex;justify-content:space-between"><span>VAT registration threshold <span style="opacity:.7">(rolling 12-month turnover)</span></span><span>${fmtGraw(Math.round(last12))} of ${fmtGraw(vt)} · ${vpct}%</span></div><div style="height:6px;background:var(--panel-2);border-radius:4px;margin-top:5px;overflow:hidden"><div style="height:100%;width:${Math.max(vpct,2)}%;background:${vcol};transition:.3s"></div></div>${vpct>=80?`<p class="mini" style="color:${vcol};margin-top:5px">⚠ ${vpct>=100?'You appear to have crossed the threshold — register for VAT now.':'Nearing the threshold — monitor monthly and register before you cross.'}</p>`:''}</div>`;
@@ -1090,10 +1148,12 @@ function renderFinances(){const C=state.commissions;const yr=new Date().getFullY
   const earnedAll=C.reduce((s,c)=>s+paidGbp(c),0);
   const receivables=C.reduce((s,c)=>s+(CLOSED(c.stage)?0:receivableGbp(c)),0);
   const completed=C.filter(c=>paidPct(c)>=100);const avg=completed.length?completed.reduce((s,c)=>s+jobValueGbp(c),0)/completed.length:0;
-  const expTotal=state.expenses.reduce((s,e)=>s+(+e.amount||0),0);const net=earnedAll-expTotal;
-  const fin=[{label:'Earned this year',val:fmtGraw(Math.round(earnedYear)),sub:'net received',bar:'var(--paid)'},{label:'Receivables',val:fmtGraw(Math.round(receivables)),sub:'approved, awaiting payment',bar:'var(--review)'},{label:'Avg completed job',val:fmtGraw(Math.round(avg)),sub:completed.length+' completed',bar:'var(--accent)'},{label:'Expenses (all)',val:fmtGraw(expTotal),sub:state.expenses.length+' items',bar:'var(--warn)'},{label:'Net profit (all)',val:fmtGraw(Math.round(net)),sub:'income − expenses',bar:'var(--good)'}];
+  const expTotal=state.expenses.reduce((s,e)=>s+(+e.amount||0),0);const teamPaid=realizedTeamCost();const net=earnedAll-expTotal-teamPaid;
+  const hasTeam=(state.team||[]).length>0;
+  const fin=[{label:'Earned this year',val:fmtGraw(Math.round(earnedYear)),sub:'net received',bar:'var(--paid)'},{label:'Receivables',val:fmtGraw(Math.round(receivables)),sub:'approved, awaiting payment',bar:'var(--review)'},hasTeam?{label:'Team payouts (paid)',val:fmtGraw(Math.round(teamPaid)),sub:'earned by the team',bar:'var(--review)'}:{label:'Avg completed job',val:fmtGraw(Math.round(avg)),sub:completed.length+' completed',bar:'var(--accent)'},{label:'Expenses (all)',val:fmtGraw(expTotal),sub:state.expenses.length+' items',bar:'var(--warn)'},{label:'Operating profit',val:fmtGraw(Math.round(net)),sub:hasTeam?'revenue − team − expenses':'income − expenses',bar:'var(--good)'}];
   return `<div class="kpis">${fin.map(c=>`<div class="kpi"><div class="label">${c.label}</div><div class="val" style="font-size:23px">${c.val}</div><div class="delta">${c.sub}</div><div class="accent-bar" style="background:${c.bar}"></div></div>`).join('')}</div>
   ${incomeChartCard()}
+  ${hasTeam?`<div style="margin-top:16px">${pnlCard()}</div>`:''}
   <div class="grid-even" style="margin-top:16px">${cashflowCard()}${receivablesAgingCard()}</div>
   <div style="margin-top:16px">${invoiceRegisterCard()}</div>
   <div class="grid-even" style="margin-top:16px">${taxCard()}${forecastCard()}</div>
@@ -1438,24 +1498,37 @@ function filterCoDropdown(){const inp=document.getElementById('f_coSearch');cons
 function hideCoDropdown(){const l=document.getElementById('f_coList');if(l)l.style.display='none';const inp=document.getElementById('f_coSearch');if(inp)inp.value='';}
 function pickCo(id){if(!coSel.includes(id))coSel.push(id);renderCoChips();hideCoDropdown();}
 function removeCo(id){coSel=coSel.filter(x=>x!==id);renderCoChips();}
+/* assignees on a commission */
+let assignSel=[]; // [{id,hours}]
+function fillAssignPicker(){const sel=document.getElementById('f_assignPick');if(!sel)return;const avail=(state.team||[]).filter(m=>m.active!==false&&!assignSel.some(a=>a.id===m.id));sel.innerHTML='<option value="">+ Assign a team member…</option>'+avail.map(m=>`<option value="${m.id}">${esc(m.name)}${m.jobRole?' · '+esc(m.jobRole):''}</option>`).join('')+((state.team||[]).length?'':'<option value="" disabled>(add team members on the Team tab)</option>');}
+function renderAssignRows(){const el=document.getElementById('f_assignRows');if(!el)return;
+  el.innerHTML=assignSel.map(a=>{const m=teamById(a.id);if(!m)return '';const hourly=m.payType==='hourly';
+    return `<div class="ms-row"><span class="ms-label" style="align-self:center">${esc(m.name)} <span class="mini">${m.payType==='share'?(m.sharePct||0)+'% share':hourly?'£'+(m.hourlyCost||0)+'/hr':'not costed'}</span></span>${hourly?`<input class="ms-pct" type="number" min="0" step="0.5" value="${a.hours||0}" oninput="setAssignHours('${a.id}',this.value)" title="their hours on this job" style="max-width:70px"><span class="mini" style="align-self:center">h</span>`:''}<button type="button" class="danger sm" onclick="removeAssignee('${a.id}')">✕</button></div>`;}).join('')||'<span class="mini" style="opacity:.6">Nobody assigned yet</span>';
+  updMarginNote();}
+function pickAssignee(id){if(!id||assignSel.some(a=>a.id===id))return;assignSel.push({id,hours:0});fillAssignPicker();renderAssignRows();}
+function removeAssignee(id){assignSel=assignSel.filter(a=>a.id!==id);fillAssignPicker();renderAssignRows();}
+function setAssignHours(id,v){const a=assignSel.find(x=>x.id===id);if(a)a.hours=+v||0;updMarginNote();}
+function updMarginNote(){const el=document.getElementById('f_marginNote');if(!el)return;const m=modalMethod();const robux=+document.getElementById('f_robux').value||0;const val=m==='gbp'?(+document.getElementById('f_gbp').value||0):rbxToGbp(robux);
+  let cost=0;assignSel.forEach(a=>{const mem=teamById(a.id);cost+=memberCostOnJob(mem,{payMethod:m,robux,gbpAmount:val},a.hours);});
+  if(!assignSel.length){el.textContent='';return;}const marg=val-cost,mp=val>0?Math.round(marg/val*100):0;el.innerHTML=`Team cost ≈ <b>${fmtGraw(Math.round(cost))}</b> · margin ≈ <b style="color:${mp<0?'var(--bad)':mp<30?'var(--warn)':'var(--good)'}">${fmtGraw(Math.round(marg))} (${mp}%)</b> of ${fmtGraw(Math.round(val))} net`;}
 function cPreviewGbp(){const m=modalMethod();let val=0,note='';
   if(m==='gbp'){const g=+document.getElementById('f_gbp').value||0;val=g;if(g&&(state.settings.txnFeePct||0)>0)note=' · client pays '+fmtGraw(Math.round(gbpGross(g)))+' incl. ~'+state.settings.txnFeePct+'% fee';}
   else{const r=+document.getElementById('f_robux').value||0;val=rbxToGbp(r);if(m==='gamepass'&&r&&(state.settings.marketplaceFeePct||0)>0)note=' · gamepass priced R$ '+gamepassGross(r).toLocaleString()+' so you net R$ '+r.toLocaleString();}
-  document.getElementById('cGbpPreview').textContent=val?('≈ '+fmtGraw(Math.round(val))+' net'+note):'';}
+  document.getElementById('cGbpPreview').textContent=val?('≈ '+fmtGraw(Math.round(val))+' net'+note):'';updMarginNote();}
 function renderChecklistEditor(list){const el=document.getElementById('f_checklist');if(!el)return;el.innerHTML=(list||[]).map(s=>`<label style="display:flex;align-items:center;gap:8px;padding:3px 2px;font-size:13px"><input type="checkbox" ${s.done?'checked':''} style="width:auto" onchange="updChecklistProg()"><span>${esc(s.label)}</span></label>`).join('');updChecklistProg();}
 function readChecklist(){return [...document.querySelectorAll('#f_checklist label')].map(l=>({label:l.querySelector('span').textContent,done:l.querySelector('input').checked}));}
 function updChecklistProg(){const cbs=[...document.querySelectorAll('#f_checklist input')];const el=document.getElementById('clProg');if(el)el.textContent=cbs.length?cbs.filter(c=>c.checked).length+' / '+cbs.length+' done':'';}
 function openCommission(){document.getElementById('cTitle').textContent='New commission';['cDelete','cThreadBtn','cHistBtn','cDupBtn','cSowBtn','cInvBtn','cDelBtn'].forEach(i=>document.getElementById(i).style.display='none');
   ['f_id','f_title','f_robux','f_gbp','f_deadline','f_notes','f_scope','f_hours','f_lostReason'].forEach(i=>document.getElementById(i).value='');
   document.getElementById('f_service').value='3D asset';document.getElementById('f_type').value='Standard';document.getElementById('f_method').value='robux';document.getElementById('f_stage').value='inbox';document.getElementById('f_priority').value='normal';document.getElementById('f_source').value='Discord';document.getElementById('f_source_mode').value='none';document.getElementById('f_rig_mode').value='none';document.getElementById('f_revInc').value='2';document.getElementById('f_revUsed').value='0';document.getElementById('f_sow').value='none';
-  toggleMethod();populateClientSelect();coSel=[];renderCoChips();renderMilestoneEditor((state.settings.defaultMilestones||[]).map(m=>({label:m.label,pct:m.pct,status:'pending',paidMonth:''})));renderChecklistEditor(defaultChecklist());updRevUsage();document.getElementById('cGbpPreview').textContent='';document.getElementById('cOverlay').classList.add('show');}
+  toggleMethod();populateClientSelect();coSel=[];renderCoChips();assignSel=[];fillAssignPicker();renderAssignRows();renderMilestoneEditor((state.settings.defaultMilestones||[]).map(m=>({label:m.label,pct:m.pct,status:'pending',paidMonth:''})));renderChecklistEditor(defaultChecklist());updRevUsage();document.getElementById('cGbpPreview').textContent='';document.getElementById('cOverlay').classList.add('show');}
 function editCommission(id){const c=state.commissions.find(x=>x.id===id);if(!c)return;document.getElementById('cTitle').textContent='Edit commission';['cDelete','cThreadBtn','cHistBtn','cDupBtn','cSowBtn','cInvBtn','cDelBtn'].forEach(i=>document.getElementById(i).style.display='inline-block');
   const g=(k,v)=>document.getElementById(k).value=v??'';populateClientSelect(c.clientId);
   g('f_id',c.id);g('f_title',c.title);g('f_service',c.service||'3D asset');g('f_type',c.type||'Standard');g('f_method',c.payMethod||'robux');g('f_robux',c.robux);g('f_gbp',c.gbpAmount);g('f_deadline',c.deadline);g('f_stage',c.stage||'inbox');g('f_priority',c.priority||'normal');g('f_source',c.source||'Discord');g('f_source_mode',c.sourceMode||'none');g('f_rig_mode',c.rigMode||'none');g('f_revInc',c.revInc);g('f_revUsed',c.revUsed||0);g('f_sow',c.sow||'none');g('f_scope',c.scope);g('f_notes',c.notes);g('f_hours',c.hoursLogged||'');g('f_lostReason',c.lostReason||'');
-  toggleMethod();coSel=(c.coClients||[]).slice();renderCoChips();renderMilestoneEditor(c.milestones&&c.milestones.length?c.milestones:defaultMS());renderChecklistEditor(c.checklist&&c.checklist.length?c.checklist:defaultChecklist());updRevUsage();cPreviewGbp();document.getElementById('cOverlay').classList.add('show');}
+  toggleMethod();coSel=(c.coClients||[]).slice();renderCoChips();assignSel=(c.assignees||[]).map(a=>({id:a.id,hours:a.hours||0}));fillAssignPicker();renderAssignRows();renderMilestoneEditor(c.milestones&&c.milestones.length?c.milestones:defaultMS());renderChecklistEditor(c.checklist&&c.checklist.length?c.checklist:defaultChecklist());updRevUsage();cPreviewGbp();document.getElementById('cOverlay').classList.add('show');}
 function closeCommission(){document.getElementById('cOverlay').classList.remove('show');}
 function saveCommission(){const title=document.getElementById('f_title').value.trim();if(!title){alert('Project title is required');return;}const v=id=>document.getElementById(id).value;
-  const obj={title,clientId:v('f_client'),service:v('f_service'),type:v('f_type'),payMethod:v('f_method'),robux:+v('f_robux')||0,gbpAmount:+v('f_gbp')||0,deadline:v('f_deadline'),stage:v('f_stage'),priority:v('f_priority'),source:v('f_source'),sourceMode:v('f_source_mode'),rigMode:v('f_rig_mode'),revInc:+v('f_revInc')||0,revUsed:Math.max(0,+v('f_revUsed')||0),sow:v('f_sow'),scope:v('f_scope').trim(),notes:v('f_notes').trim(),hoursLogged:Math.max(0,+v('f_hours')||0),lostReason:v('f_lostReason').trim(),coClients:coSel.slice(),milestones:readMilestones(),checklist:readChecklist()};
+  const obj={title,clientId:v('f_client'),service:v('f_service'),type:v('f_type'),payMethod:v('f_method'),robux:+v('f_robux')||0,gbpAmount:+v('f_gbp')||0,deadline:v('f_deadline'),stage:v('f_stage'),priority:v('f_priority'),source:v('f_source'),sourceMode:v('f_source_mode'),rigMode:v('f_rig_mode'),revInc:+v('f_revInc')||0,revUsed:Math.max(0,+v('f_revUsed')||0),sow:v('f_sow'),scope:v('f_scope').trim(),notes:v('f_notes').trim(),hoursLogged:Math.max(0,+v('f_hours')||0),lostReason:v('f_lostReason').trim(),coClients:coSel.slice(),assignees:assignSel.slice(),milestones:readMilestones(),checklist:readChecklist()};
   const id=v('f_id');
   if(obj.stage==='quoted'){const prev=id?state.commissions.find(x=>x.id===id):null;obj.quotedAt=(prev&&prev.quotedAt)||todayStr();}
   if(id){const c=state.commissions.find(x=>x.id===id);const changed=c.stage!==obj.stage;if(changed)obj.stageSince=todayStr();Object.assign(c,obj);if(changed)pushStageHistory(c,obj.stage);if(obj.stage==='paid')setStage(c,'paid');}else{obj.id=uid();obj.stageSince=todayStr();obj.stageHistory=[{s:obj.stage,at:new Date().toISOString()}];state.commissions.push(obj);}
@@ -1938,7 +2011,7 @@ function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileRe
   let mode='replace';
   if(!confirm(summary)){if(confirm('MERGE instead?\n\nRecords from the backup that don\'t exist here are added. Existing records, settings and templates are kept unchanged.')){mode='merge';}else return;}
   if(mode==='replace'){state=migrate(data);if(enc){cryptoKey=key;currentSalt=salt;encEnabled=true;}}
-  else{const inc=migrate(data);['clients','commissions','expenses','agreements','invoices','retainers','cashouts'].forEach(k=>{const have=new Set((state[k]||[]).map(x=>x.id));(inc[k]||[]).forEach(x=>{if(x&&x.id&&!have.has(x.id))state[k]=(state[k]||[]).concat([x]);});});state.settings.invoiceSeq=Math.max(+state.settings.invoiceSeq||1,+(inc.settings&&inc.settings.invoiceSeq)||1);}
+  else{const inc=migrate(data);['clients','commissions','expenses','agreements','invoices','retainers','cashouts','team'].forEach(k=>{const have=new Set((state[k]||[]).map(x=>x.id));(inc[k]||[]).forEach(x=>{if(x&&x.id&&!have.has(x.id))state[k]=(state[k]||[]).concat([x]);});});state.settings.invoiceSeq=Math.max(+state.settings.invoiceSeq||1,+(inc.settings&&inc.settings.invoiceSeq)||1);}
   ensureHtmlTemplates();normalizeCommissions();ensureMessages();persist();updateFxBadge();renderTab();alert(mode==='replace'?'Backup restored.':'Backup merged.');}catch(err){alert('Could not restore — wrong passphrase or corrupt file.');}};r.readAsText(f);e.target.value='';}
 function loadSample(){if(confirm('Load the sample data set? This replaces ALL current data.')){state=sampleState();ensureHtmlTemplates();normalizeCommissions();ensureMessages();persist();updateFxBadge();renderTab();}}
 function clearAll(){if(confirm('Delete ALL data? This cannot be undone.')){const d=defaultState();d.clients=[];d.commissions=[];d.expenses=[];d.agreements=[];state=d;ensureHtmlTemplates();normalizeCommissions();ensureMessages();persist();renderTab();}}
@@ -2019,7 +2092,7 @@ function bootFrom(raw){let env=null;try{env=JSON.parse(raw);}catch(e){}loadedTs=
 function renderTabsNav(){document.getElementById('tabs').innerHTML=TABS.map(t=>`<button class="${t===activeTab?'active':''}" onclick="setTab('${t}')">${t}</button>`).join('');}
 function setTab(t){activeTab=t;renderTabsNav();renderTab();window.scrollTo(0,0);}
 function renderTab(){const showKpi=['Overview','Pipeline'].includes(activeTab);let body='';
-  if(activeTab==='Overview')body=renderOverview();else if(activeTab==='Pipeline')body=renderPipeline();else if(activeTab==='Clients')body=renderClients();else if(activeTab==='Finances')body=renderFinances();else if(activeTab==='Agreements')body=renderAgreements();else if(activeTab==='Documents')body=renderDocuments();else if(activeTab==='Messages')body=renderMessages();else if(activeTab==='Settings')body=renderSettings();
+  if(activeTab==='Overview')body=renderOverview();else if(activeTab==='Pipeline')body=renderPipeline();else if(activeTab==='Clients')body=renderClients();else if(activeTab==='Team')body=renderTeam();else if(activeTab==='Finances')body=renderFinances();else if(activeTab==='Agreements')body=renderAgreements();else if(activeTab==='Documents')body=renderDocuments();else if(activeTab==='Messages')body=renderMessages();else if(activeTab==='Settings')body=renderSettings();
   document.getElementById('view').innerHTML=(showKpi?`<div id="kpiStrip">${kpiStripHTML()}</div>`:'')+body;
   if(activeTab==='Pipeline')mountBoard();if(activeTab==='Settings'){mountSettingMS();updateStorageQuota();mountServerExtras();}if(activeTab==='Clients')mountClients();if(activeTab==='Agreements')mountAgreements();updateCapBadge();updateAppBadge();}
 setupChartTip();boot();
